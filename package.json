@@ -1,0 +1,17 @@
+{
+  "name": "pricelens",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PriceLens — competitive price intelligence for Tata CLIQ (CLIQ vs Myntra vs Ajio)",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "ingest": "npm --workspace @pricelens/api run ingest",
+    "match": "npm --workspace @pricelens/api run match",
+    "dev:api": "npm --workspace @pricelens/api run dev",
+    "dev:web": "npm --workspace @pricelens/web run dev",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+build/
+*.log
+.env
+.env.local
+.DS_Store
+apps/*/node_modules/
+# keep ingested sample data out of git by default (large / time-sensitive)
+apps/api/data/*.json
+
+# local reference assets
+ChatGPT Image*.png

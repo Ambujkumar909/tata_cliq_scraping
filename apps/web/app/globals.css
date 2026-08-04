@@ -1,0 +1,228 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Sora', system-ui, sans-serif;
+}
+
+/* ── Theme base ────────────────────────────────────────────────
+   Light is the default; adding .dark on <html> flips the whole app.
+   Theme-dependent values used from inline styles live in CSS variables. */
+html, body {
+  background-color: #f5f6fa;
+  color: #1e293b;
+  -webkit-font-smoothing: antialiased;
+}
+:root {
+  --card-border: rgba(226, 232, 240, 1);
+  --card-bg: #ffffff;
+  --ring-track: rgba(15, 23, 42, 0.08);
+}
+html.dark, html.dark body {
+  background-color: #07070c;
+  color: #e7e7ef;
+}
+html.dark {
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-bg: rgba(255, 255, 255, 0.02);
+  --ring-track: rgba(255, 255, 255, 0.08);
+}
+
+/* Dark-theme mesh (the light variant lives in tailwind.config.ts) */
+html.dark .bg-mesh {
+  background-image:
+    radial-gradient(60% 60% at 15% 10%, rgba(225, 29, 72, 0.18) 0%, transparent 60%),
+    radial-gradient(50% 50% at 85% 15%, rgba(47, 128, 237, 0.14) 0%, transparent 55%),
+    radial-gradient(60% 60% at 60% 100%, rgba(255, 63, 108, 0.12) 0%, transparent 60%);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #eef0f5; }
+::-webkit-scrollbar-thumb { background: #c8cedb; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #aab2c5; }
+html.dark ::-webkit-scrollbar-track { background: #0b0b14; }
+html.dark ::-webkit-scrollbar-thumb { background: #26263f; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #37375a; }
+
+@layer components {
+  .glass {
+    @apply bg-white border border-slate-200 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.08] dark:shadow-none dark:backdrop-blur-xl;
+  }
+  .glass-hover {
+    @apply transition-all duration-300 hover:border-slate-300 hover:shadow-md dark:hover:bg-white/[0.06] dark:hover:border-white/[0.14] dark:hover:shadow-none;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium;
+  }
+  .skeleton {
+    @apply relative overflow-hidden bg-slate-200/60 dark:bg-white/[0.04];
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent);
+  }
+  html.dark .skeleton::after {
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+  }
+}
+
+.text-balance { text-wrap: balance; }
+
+/* ── Print / Export-PDF ────────────────────────────────────────
+   The app is dark-themed; a printed report must be light, high-contrast
+   and paginate cleanly. Using the browser's own print pipeline keeps the
+   PDF vector + selectable-text and adds no dependencies (and no headless
+   browser, which this stack deliberately avoids).                        */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 6mm 6mm;
+  }
+
+  /* ── ONE-PAGE COMPACT MODE ─────────────────────────────────
+     The whole report must land on a single A4 landscape sheet.
+     Strategy: keep the on-screen two-column layout (table + sidebar),
+     compress every density knob (padding, font, imagery), then zoom the
+     whole canvas down. zoom (not transform) so the print engine reflows
+     page geometry correctly in Chromium. */
+  .report-scale {
+    zoom: 0.48;
+    gap: 6px !important;
+  }
+  .report-scale table th,
+  .report-scale table td {
+    padding: 2px 6px !important;
+    font-size: 11px !important;
+    line-height: 1.25 !important;
+  }
+  .report-scale table th div span,
+  .report-scale table td span {
+    font-size: 11px !important;
+  }
+  /* Product photos: thumbnails, not hero images. */
+  .report-scale img {
+    height: 44px !important;
+    width: 36px !important;
+    object-fit: cover;
+  }
+  /* Group band headers tighter. */
+  .report-scale td[colspan] {
+    padding-top: 6px !important;
+    padding-bottom: 2px !important;
+  }
+  /* Sidebar stays BESIDE the table (override the stacked fallback below)
+     and slims down. */
+  .report-scale .lg\:grid-cols-\[1fr_300px\] {
+    display: grid !important;
+    grid-template-columns: 1fr 240px !important;
+    gap: 8px !important;
+  }
+  .report-scale aside {
+    margin-top: 0 !important;
+    padding: 8px !important;
+    gap: 8px !important;
+    font-size: 10px !important;
+  }
+  .report-scale aside ul li,
+  .report-scale aside p {
+    font-size: 9.5px !important;
+    line-height: 1.3 !important;
+  }
+  /* The animated confidence donut never prints (replaced by a static text
+     badge via .print-only); sidebar icon SVGs keep their natural size. */
+  /* Header band compact. */
+  .report-scale h2 {
+    font-size: 15px !important;
+  }
+  .report-scale .grid.sm\:grid-cols-\[1\.4fr_auto_1\.4fr\] {
+    padding: 6px 10px !important;
+    gap: 8px !important;
+  }
+  /* Printed URLs: tiny but present. */
+  .report-scale .print-only p {
+    font-size: 7px !important;
+  }
+  /* One page means no page breaks — drop the keep-together rules that would
+     otherwise push overflow onto a second sheet. */
+  .report-scale tr,
+  .report-scale th,
+  .report-scale td,
+  .report-scale section,
+  .report-scale aside,
+  .report-scale .rounded-2xl {
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #111 !important;
+  }
+  .bg-mesh, .fixed { display: none !important; }
+
+  /* Anything interactive or navigational is noise on paper. */
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+
+  main { max-width: none !important; padding: 0 !important; }
+
+  /* Flatten the glassmorphism into printable surfaces. */
+  .glass {
+    background: #fff !important;
+    backdrop-filter: none !important;
+    border: 1px solid #d4d4d8 !important;
+    box-shadow: none !important;
+  }
+  [class*="rounded"] { box-shadow: none !important; }
+
+  /* Force text to ink. Verdict colours are re-applied below. */
+  .text-white, .text-white\/90, .text-white\/80, .text-white\/70,
+  .text-white\/60, .text-white\/50, .text-white\/45, .text-white\/40,
+  .text-white\/35, .text-white\/30, .text-white\/25 {
+    color: #18181b !important;
+  }
+
+  /* Keep the legend meaningful on paper. */
+  .text-emerald-400, .text-emerald-300 { color: #047857 !important; }
+  .text-amber-400, .text-amber-300     { color: #b45309 !important; }
+  .text-rose-400, .text-rose-300       { color: #be123c !important; }
+  .text-sky-400, .text-sky-300         { color: #0369a1 !important; }
+  .text-violet-400                     { color: #6d28d9 !important; }
+
+  /* Tables: visible rules, and never split a row across pages. */
+  table { width: 100% !important; border-collapse: collapse !important; }
+  th, td {
+    border-color: #d4d4d8 !important;
+    color: #18181b !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  thead th { background: #f4f4f5 !important; }
+  tr { page-break-inside: avoid; break-inside: avoid; }
+
+  /* The comparison table must not be trapped in a scroll container. */
+  .overflow-x-auto, .overflow-y-auto {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Sidebar drops below the table rather than squeezing it. */
+  .lg\:grid-cols-\[1fr_300px\] { display: block !important; }
+  aside { margin-top: 8mm; page-break-inside: avoid; break-inside: avoid; }
+
+  section, .rounded-2xl { page-break-inside: avoid; break-inside: avoid; }
+  img { max-width: 100% !important; }
+
+  /* Preserve chip/verdict backgrounds the report relies on. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+/* Hidden on screen, shown only on paper. */
+.print-only { display: none; }

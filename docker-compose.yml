@@ -1,0 +1,63 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pricelens-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: pricelens-api
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4010
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGIN: http://localhost:3000
+      # Fetching / scraping tuning (pure HTTP — no headless browser)
+      HTTP_TIMEOUT_MS: 20000
+      MATCH_MIN_SCORE: "0.58"
+      INGEST_TARGET_COUNT: "2000"
+    ports:
+      - "4010:4010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4010/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: http://localhost:4010/api
+    container_name: pricelens-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      # Server-side calls from Next to the API (inside the compose network)
+      API_INTERNAL_BASE: http://api:4010/api
+      # Client-side calls from the browser
+      NEXT_PUBLIC_API_BASE: http://localhost:4010/api
+    ports:
+      - "3000:3000"
+
+volumes:
+  redis-data:
