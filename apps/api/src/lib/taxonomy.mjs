@@ -103,6 +103,10 @@ export const COLOR_FAMILY = {
   lime: 'green', pista: 'green', seagreen: 'green',
   ebony: 'black', onyx: 'black', jet: 'black', midnight: 'black', carbon: 'black',
   crimson: 'red', scarlet: 'red', cherry: 'red', brick: 'red', rouge: 'red',
+  // 'multi' is a real colour CLASS, not an unknown: a multicolour garment can
+  // legitimately image as many dominant shades, so it is never a hard conflict
+  // with a concrete family — but it demands image proof (see matcher).
+  multicolor: 'multi', multicolour: 'multi', multi: 'multi', assorted: 'multi',
 };
 
 // ── Cross-platform token synonyms (semantic layer) ────────────

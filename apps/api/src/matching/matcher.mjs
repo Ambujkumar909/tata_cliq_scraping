@@ -188,7 +188,13 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
     //    "Yellow" is a verified same-product pair at Δe 5.9), so a conflict is
     //    survivable — but only on strong pixel evidence.
     let rejected = null;
-    if (img?.colorRejected && !f.g.colorAgree) {
+    if (f.g.colorMulti && !(img?.deltaE != null && img.deltaE <= 15)) {
+      // One side claims MULTICOLOUR: never a name-conflict, but a positive
+      // claim that needs moderate image proof (Δe ≤ COLOR_CONFIRM). Without
+      // this, a "Multicolor" girls dress matched a WHITE heart-print dress at
+      // Δe 25.2 — just under the generic 26 rejection line.
+      rejected = 'color_unproven';
+    } else if (img?.colorRejected && !f.g.colorAgree) {
       // Image says different shade AND the labels don't agree → reject.
       // When both retailers NAME the same colour family, a bad Δe is far more
       // often model-shot vs flat-lay lighting than a real colourway change —

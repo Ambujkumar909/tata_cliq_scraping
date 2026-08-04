@@ -115,10 +115,14 @@ export function hardGates(anchor, candidate) {
   // image proof before accepting it. See COLOUR PROOF in matcher.mjs.
   const aFam = colorFamily(anchor.color) || colorFamily(anchor.title);
   const cFam = colorFamily(candidate.color) || colorFamily(candidate.title);
-  const colorConflict = Boolean(aFam && cFam && aFam !== cFam);
+  // 'multi' vs a concrete family is NOT a conflict (a multicolour garment can
+  // image as any dominant shade) — but it is not agreement either: the matcher
+  // demands moderate image proof for it (colorMulti flag).
+  const colorMulti = aFam === 'multi' || cFam === 'multi';
+  const colorConflict = Boolean(aFam && cFam && aFam !== cFam && !colorMulti);
   // Both retailers assert the SAME colour family — used to stop noisy image
   // Δe (model-shot vs flat-lay lighting) from vetoing two agreeing labels.
-  const colorAgree = Boolean(aFam && cFam && aFam === cFam);
+  const colorAgree = Boolean(aFam && cFam && aFam === cFam && aFam !== 'multi');
 
   return {
     pass: brandOk && genderOk && garmentOk && fitOk,
@@ -133,6 +137,7 @@ export function hardGates(anchor, candidate) {
     garmentKnown,
     colorConflict,
     colorAgree,
+    colorMulti,
   };
 }
 
