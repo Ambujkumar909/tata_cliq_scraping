@@ -40,7 +40,7 @@ services:
       STRICT_SKU: ${STRICT_SKU:-true}
       INGEST_TARGET_COUNT: ${INGEST_TARGET_COUNT:-2000}
       # Saved comparisons are replayed for this long before re-scraping.
-      REPORT_TTL_HOURS: ${REPORT_TTL_HOURS:-24}
+      REPORT_TTL_HOURS: ${REPORT_TTL_HOURS:-168}
       CACHE_DIR: /app/cache
     ports:
       - "4010:4010"

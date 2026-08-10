@@ -25,8 +25,8 @@ export const config = {
    * A comparison is expensive (three storefronts + image hashing), so it is
    * persisted and replayed rather than recomputed. It cannot be kept forever
    * though: this is a *pricing* tool, and Myntra/Ajio prices move daily, so a
-   * week-old saved price would be reported as today's. 24h is the compromise;
-   * "Refresh live" always bypasses it.
+   * month-old saved price would be reported as today's. 7 days is the
+   * compromise; "Refresh live" always bypasses it.
    */
-  reportTtlHours: Number(process.env.REPORT_TTL_HOURS || 24),
+  reportTtlHours: Number(process.env.REPORT_TTL_HOURS || 168),
 };

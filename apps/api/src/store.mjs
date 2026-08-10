@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { normalizeText } from './lib/normalize.mjs';
 import { buildIdf } from './lib/semantic.mjs';
-import { persistence, isFresh, ageHours } from './cache/persistence.mjs';
+import { persistence, isFresh, ageHours, fingerprint } from './cache/persistence.mjs';
+import { toExportRow } from './export/rows.mjs';
 import { config } from './config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -43,10 +44,28 @@ class Store {
       buildIdf(products.map((p) => `${p.brand} ${p.title}`));
     }
 
+    /**
+     * The batch-matcher's snapshot, gated on the same fingerprint as the live
+     * cache.
+     *
+     * Without this check the fingerprint protects only Redis and the file
+     * cache, and a `npm run match` artifact from an older engine walks straight
+     * past it into memory — serving verdicts the current matcher would never
+     * reach, which is exactly what the fingerprint exists to prevent. A snapshot
+     * with no fingerprint at all predates the field, so it is stale by
+     * definition.
+     */
     const cmpPath = resolve(DATA, 'comparisons.json');
     if (existsSync(cmpPath)) {
-      const { results } = JSON.parse(await readFile(cmpPath, 'utf8'));
-      for (const r of results) this.comparisons.set(r.anchor.id, r);
+      const snapshot = JSON.parse(await readFile(cmpPath, 'utf8'));
+      if (snapshot.fingerprint === fingerprint()) {
+        for (const r of snapshot.results || []) this.comparisons.set(r.anchor.id, r);
+      } else {
+        console.warn(
+          `[store] ignoring comparisons.json — built by ${snapshot.fingerprint || 'an older engine'}, ` +
+            `current is ${fingerprint()}. Re-run \`npm run match\` to refresh it.`,
+        );
+      }
     }
 
     // Replay comparisons saved by earlier runs. They win over the shipped
@@ -229,6 +248,97 @@ class Store {
       ttlHours: config.reportTtlHours,
       freshCount: rows.filter((r) => r.fresh).length,
       items,
+    };
+  }
+
+  /**
+   * Every saved comparison flattened into business rows, filtered.
+   *
+   * The filter set is deliberately the merchandising one — category, gender,
+   * brand, price band, competitive position — not the engine's vocabulary. A
+   * category manager exports "women's footwear where a rival undercuts us",
+   * never "comparisons whose myntra competitor has status=matched".
+   *
+   * Rows are derived on read rather than stored: a comparison is the durable
+   * artefact, and deriving keeps the export honest when the taxonomy or the
+   * recommendation logic changes.
+   */
+  exportRows(filters = {}) {
+    const {
+      q = '', brands = [], categories = [], genders = [],
+      position = 'all', matched = 'all', freshOnly = false,
+      minPrice = null, maxPrice = null,
+    } = filters;
+
+    const nq = normalizeText(q);
+    const terms = nq ? nq.split(' ').filter(Boolean) : [];
+    const has = (list, v) => !list.length || list.includes(v);
+
+    const rows = [];
+    for (const cmp of this.comparisons.values()) {
+      if (!cmp?.anchor?.id) continue;
+      const row = toExportRow(cmp);
+
+      // `category`/`gender` are null when nothing could be derived; those rows
+      // answer to the explicit 'unclassified' filter value, never to a real
+      // category, so an export of "T-Shirts" can't quietly include unknowns.
+      if (!has(categories, row.category ?? 'unclassified')) continue;
+      if (!has(genders, row.gender ?? 'unspecified')) continue;
+      if (!has(brands, row.brand)) continue;
+      if (freshOnly && !row.fresh) continue;
+      if (matched === 'matched' && row.matchedCount === 0) continue;
+      if (matched === 'unmatched' && row.matchedCount > 0) continue;
+      if (position !== 'all' && row.posture !== position) continue;
+      if (minPrice != null && (row.cliqPrice == null || row.cliqPrice < minPrice)) continue;
+      if (maxPrice != null && (row.cliqPrice == null || row.cliqPrice > maxPrice)) continue;
+      if (terms.length) {
+        const hay = normalizeText(`${row.brand || ''} ${row.title || ''} ${row.id}`);
+        if (!terms.every((t) => hay.includes(t))) continue;
+      }
+      rows.push(row);
+    }
+
+    // Biggest competitive exposure first: the rows where a rival undercuts CLIQ
+    // by the most money are the ones a merchandiser acts on today.
+    rows.sort((a, b) => (b.priceGap ?? -Infinity) - (a.priceGap ?? -Infinity));
+    return rows;
+  }
+
+  /**
+   * The filter vocabulary the export UI offers, with counts, derived from what
+   * is actually saved. Offering a category with nothing behind it produces an
+   * empty spreadsheet and a support ticket.
+   */
+  exportFacets() {
+    const rows = this.exportRows();
+    const tally = (key, labelKey) => {
+      const m = new Map();
+      for (const r of rows) {
+        const value = r[key] ?? (key === 'category' ? 'unclassified' : 'unspecified');
+        const label = r[labelKey];
+        const hit = m.get(value) || { value, label, count: 0 };
+        hit.count++;
+        m.set(value, hit);
+      }
+      return [...m.values()].sort((a, b) => b.count - a.count);
+    };
+    const prices = rows.map((r) => r.cliqPrice).filter((p) => typeof p === 'number');
+    return {
+      total: rows.length,
+      categories: tally('category', 'categoryLabel'),
+      genders: tally('gender', 'genderLabel'),
+      brands: [...rows.reduce((m, r) => m.set(r.brand, (m.get(r.brand) || 0) + 1), new Map()).entries()]
+        .filter(([name]) => name)
+        .sort((a, b) => b[1] - a[1])
+        .map(([value, count]) => ({ value, label: value, count })),
+      positions: [
+        { value: 'undercut', label: 'Competitor undercuts CLIQ', count: rows.filter((r) => r.posture === 'undercut').length },
+        { value: 'winning', label: 'CLIQ is cheapest', count: rows.filter((r) => r.posture === 'winning').length },
+        { value: 'parity', label: 'Price parity', count: rows.filter((r) => r.posture === 'parity').length },
+      ],
+      matchedCount: rows.filter((r) => r.matchedCount > 0).length,
+      freshCount: rows.filter((r) => r.fresh).length,
+      priceRange: prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null,
     };
   }
 

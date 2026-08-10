@@ -6,7 +6,7 @@ import {
   Lightbulb, ExternalLink, RefreshCw, Ban, Info, Printer, ShieldCheck, Archive, Zap,
 } from 'lucide-react';
 import type { MatchReport as Report, ReportGroup, ReportRow, ReportCell, Verdict, ReportColumn } from '@/lib/types';
-import { api, PLATFORM_META } from '@/lib/api';
+import { api, PLATFORM_META, DEFAULT_TTL_HOURS } from '@/lib/api';
 
 // Legend colours. Grey ('na') deliberately reads as "no data", never as a
 // difference — most Ajio specification cells are genuinely unknown because its
@@ -34,6 +34,12 @@ const freshness = (ageHours?: number | null) => {
   if (ageHours < 1) return `${Math.round(ageHours * 60)} min ago`;
   if (ageHours < 24) return `${Math.round(ageHours)} h ago`;
   return `${Math.round(ageHours / 24)} d ago`;
+};
+
+// The TTL is a week, so "168h" is technically right and humanly useless.
+const ttlWindow = (hours?: number | null) => {
+  const h = hours ?? DEFAULT_TTL_HOURS;
+  return h >= 48 ? `${Math.round(h / 24)} days` : `${h}h`;
 };
 
 const matchTypeTone = (t?: string | null) =>
@@ -257,12 +263,12 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
           {data.cached ? (
             <>
               <Archive size={11} className="mr-1 inline align-[-1px]" />
-              Saved report · matched {freshness(data.ageHours)} · re-scrapes after {data.ttlHours ?? 24}h
+              Saved report · matched {freshness(data.ageHours)} · re-scrapes after {ttlWindow(data.ttlHours)}
             </>
           ) : (
             <>
               <Zap size={11} className="mr-1 inline align-[-1px] text-amber-500" />
-              Matched live just now · saved for the next {data.ttlHours ?? 24}h
+              Matched live just now · saved for the next {ttlWindow(data.ttlHours)}
             </>
           )}
         </p>

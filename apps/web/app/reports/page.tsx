@@ -2,8 +2,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Archive, Link2, Search, RefreshCw, Clock, ExternalLink } from 'lucide-react';
-import { api, PLATFORM_META } from '@/lib/api';
+import { ArrowLeft, Archive, Link2, Search, RefreshCw, Clock, ExternalLink, FileSpreadsheet } from 'lucide-react';
+import { ExportModal } from '@/components/ExportModal';
+import { api, PLATFORM_META, DEFAULT_TTL_HOURS } from '@/lib/api';
 import type { SavedReport, SavedReportPage } from '@/lib/types';
 import { inr } from '@/lib/format';
 import { Logo } from '@/components/ui';
@@ -25,6 +26,14 @@ const since = (h: number | null) => {
   return `${Math.round(h / 24)} d ago`;
 };
 
+// A week-long TTL makes "160 h left" unreadable; switch to days past two days.
+const remaining = (h: number | null) => {
+  if (h == null) return '0 min left';
+  if (h < 1) return `${Math.round(h * 60)} min left`;
+  if (h < 48) return `${Math.round(h)} h left`;
+  return `${Math.round(h / 24)} d left`;
+};
+
 /**
  * A saved report is only replayed while it is fresh; past the TTL the next open
  * re-scrapes it. Showing the remaining window (rather than just "saved") is what
@@ -42,9 +51,7 @@ function Freshness({ r, ttlHours }: { r: SavedReport; ttlHours: number }) {
   return (
     <span className="flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-white/40">
       <Clock size={11} />
-      {r.expiresInHours != null && r.expiresInHours < 1
-        ? `${Math.round(r.expiresInHours * 60)} min left`
-        : `${Math.round(r.expiresInHours ?? 0)} h left`}
+      {remaining(r.expiresInHours)}
       <span className="h-1 w-10 overflow-hidden rounded-full bg-slate-200 dark:bg-white/[0.08]">
         <span className="block h-full rounded-full bg-emerald-400" style={{ width: `${pct}%` }} />
       </span>
@@ -143,6 +150,7 @@ export default function ReportsPage() {
   const [q, setQ] = useState('');
   const [freshOnly, setFreshOnly] = useState(false);
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
   const debounce = useRef<ReturnType<typeof setTimeout>>();
 
   const fetchPage = useCallback(async (nextPage: number) => {
@@ -168,6 +176,12 @@ export default function ReportsPage() {
       <nav className="mb-8 flex items-center justify-between">
         <Logo />
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setExporting(true)}
+            className="flex items-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700"
+          >
+            <FileSpreadsheet size={13} /> Export to Excel
+          </button>
           <Link
             href="/"
             className="flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/[0.06] px-3.5 py-2 text-xs font-medium text-slate-600 dark:text-white/70 transition hover:bg-slate-200 dark:hover:bg-white/[0.12] hover:text-slate-900 dark:hover:text-white"
@@ -184,7 +198,8 @@ export default function ReportsPage() {
         </h1>
         <p className="mt-2 max-w-2xl text-sm text-slate-500 dark:text-white/50">
           Every comparison already generated, newest first. Opening one replays the saved result
-          instantly instead of re-scraping — for up to {data?.ttlHours ?? 24}h, after which the next
+          instantly instead of re-scraping — for up to{' '}
+          {Math.round((data?.ttlHours ?? DEFAULT_TTL_HOURS) / 24)} days, after which the next
           open refreshes it.
         </p>
       </header>
@@ -228,7 +243,7 @@ export default function ReportsPage() {
       <div className="flex flex-col gap-3">
         {loading && !items.length
           ? Array.from({ length: 6 }).map((_, i) => <div key={i} className="skeleton h-28 rounded-2xl" />)
-          : items.map((r, i) => <ReportRow key={r.id} r={r} ttlHours={data?.ttlHours ?? 24} index={i} />)}
+          : items.map((r, i) => <ReportRow key={r.id} r={r} ttlHours={data?.ttlHours ?? DEFAULT_TTL_HOURS} index={i} />)}
       </div>
 
       {!loading && !items.length ? (
@@ -264,6 +279,8 @@ export default function ReportsPage() {
           </button>
         </div>
       ) : null}
+
+      {exporting ? <ExportModal onClose={() => setExporting(false)} /> : null}
     </main>
   );
 }

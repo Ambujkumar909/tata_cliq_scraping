@@ -26,7 +26,7 @@ Marketplace pricing teams fly blind: the same style sells on three platforms und
 ┌──────────────┐     HTTP      ┌─────────────────────────────┐
 │  Next.js web │ ────────────▶ │  Fastify API (modular)      │
 │  (port 3000) │               │  • catalog store            │
-└──────────────┘               │  • matching engine (v4)     │
+└──────────────┘               │  • matching engine (v5)     │
                                │  • comparison report        │
                                │  • source adapters ─────────┼──▶ Tata CLIQ  (searchbff + PDP)
                                │                             │──▶ Myntra     (gateway + PDP)
@@ -39,6 +39,7 @@ Marketplace pricing teams fly blind: the same style sells on three platforms und
 - 🔗 **Paste any CLIQ link** — products outside the ingested catalog are fetched and matched live
 - 📊 **Full comparison report** — Product · Pricing & Offers · Specifications · Content Quality · AI scores, with an AI decision summary and one-click *Verify on Myntra/Ajio* links
 - 🖨️ **One-page PDF export** — compact, print-optimised, empty fields auto-omitted
+- 📗 **Excel *and* PDF export for the business** — dropdown filters (category, gender, brand, competitive position, price band), then download a 3-sheet workbook or a landscape PDF report. Both lead with who is cheapest and who is dearest, the ₹ gap and the recommendation — not a raw comparison dump
 - 🌓 **Dual theme** — light/dark with a top-right toggle, persisted, flash-free
 - 🧠 **Semantic matching without an ML model** — IDF-weighted tokens + character trigrams + domain-concept overlap; a `setEmbedder()` seam exists for upgrading
 - 🧬 **Category-universal by design** — vocabulary is data (`taxonomy.mjs` + drop-in JSON), brand-issued model codes (`541`, `WH-CH520`) work for any category, and unknown vocabulary can never produce a wrong verdict
@@ -56,7 +57,7 @@ Every source has a **listing tier** (find candidates) and a **PDP detail tier** 
 
 Everything is **pure HTTP** — no headless browser anywhere in the stack. Ajio's blocked detail tier renders as *"not available"*, never as a fabricated difference (verify proxy setup any time with `node scripts/test-proxy.mjs`).
 
-## The matching engine (v4)
+## The matching engine (v5)
 
 ```
 Layer 1  RETRIEVAL   complementary queries per source, unioned + deduped
@@ -72,6 +73,7 @@ Signals that are missing get **renormalised away**, never zeroed — so Ajio isn
 - **Ambiguity detection**: when near-tied candidates disagree on price ("navy slim jeans" and its siblings), the engine refuses to pick and lists them for a human glance — same-price ties surface normally since the price answer is identical
 - **Backdrop-learned image colour**: the garment shade is read from the dominant pixel cluster after excluding the studio backdrop (learned from the image border) — this is what catches wrong-colourway look-alikes that share every text attribute
 - **Colour-truth hierarchy**: two retailers *agreeing* on a colour name outranks noisy pixels (model-shot vs flat-lay lighting); *conflicting* names demand strict pixel proof
+- **Gender is read, never inferred from a code** (v5): the anchor's gender comes from the title, then CLIQ's PDP `gender` field, then the breadcrumb — and stays **unknown** when none of them says. Earlier versions fell back to the category code's first letter, which CLIQ's hierarchy does not encode (`MSH10` holds women's product, `MSH21` kids'), so every gender-silent title resolved to "men" — arming the gender gate backwards *and* searching the wrong department (`lov men top` for a women's top). `scripts/verify-gender.mjs` now proves the prefix rule false against the live catalog rather than assuming it
 
 ### Canonical attributes
 
@@ -133,7 +135,7 @@ Then paste any Tata CLIQ product link into the dashboard — products outside th
 | `SCRAPE_PROXY` | — | Indian residential proxy; unlocks Ajio's detail tier |
 | `PROXY_HOSTS` | `ajio.com` | Hosts routed through the proxy (suffix match) |
 | `HTTP_TIMEOUT_MS` | `20000` | Per-request deadline (every network call has one) |
-| `REPORT_TTL_HOURS` | `24` | How long a saved comparison is replayed before re-scraping |
+| `REPORT_TTL_HOURS` | `168` (7 days) | How long a saved comparison is replayed before re-scraping |
 | `CACHE_DIR` | `apps/api/data` | Where the fallback comparison snapshot is written |
 
 Every one of these is read from `.env` by both `npm run dev` and `docker compose`
@@ -150,7 +152,7 @@ comparison is persisted and replayed** instead of being recomputed:
   or to a JSON snapshot in `CACHE_DIR` when Redis is unreachable.
 - **Survives** API restarts, container rebuilds and redeploys; the store replays
   the cache on boot, so the catalog grid keeps its comparison badges.
-- **Expires after `REPORT_TTL_HOURS`** (24h). This is a pricing tool: a saved
+- **Expires after `REPORT_TTL_HOURS`** (168h — 7 days). This is a pricing tool: a saved
   report is a recording, not a live quote, and the UI labels it as such
   ("Saved report · matched 3 h ago"). **Refresh live** always bypasses it.
 - **Fingerprinted** by matcher version + `STRICT_SKU` + `MATCH_MIN_SCORE`, so
@@ -169,6 +171,58 @@ catalog grid, so this page is the only way back to those reports.
 Cache state is visible at `GET /api/cache`. Losing the cache costs time, never
 correctness.
 
+## Export — Excel and PDF
+
+The screen answers "is this the same product?". The spreadsheet answers "what
+do we do about it?" — so **Export to Excel** (dashboard nav, and `/reports`)
+turns saved comparisons into a workbook a category manager can pivot.
+
+**Built to be read as analysis, not as a data dump.** A comparison carries
+specifications, content-quality counts, four sub-scores and per-attribute
+agreement; all of that justifies the verdict on screen and buries the decision
+in a sheet. What survives is what changes a decision:
+
+| Block | Columns |
+|---|---|
+| What it is | Brand, product, category, gender, MRP |
+| What the market charges | Tata CLIQ, Myntra, Ajio — side by side, **lowest tinted green and highest tinted red in the row itself** |
+| Who wins | Cheapest on, Dearest on, Spread (with a data bar), CLIQ vs cheapest rival in ₹ and %, **Price Index** (CLIQ against the cheapest listing as 100), Position |
+| Promotional stance | CLIQ discount vs the best rival discount |
+| What to do | Match confidence, and the **recommendation** — the same `recommendedAction` string the report UI shows, reused rather than re-derived |
+
+A blank competitor price says *why* it is blank ("Not listed", "Blocked —
+retry") rather than reading as free. Cheapest and dearest are left empty when
+there is only one listing or the prices are equal — naming a winner there
+reported Tata CLIQ as simultaneously cheapest and dearest.
+
+**Three sheets:**
+
+| Sheet | What it is |
+|---|---|
+| `Summary` | The filters used (so a forwarded file explains itself), coverage and match rate, price-position split, total ₹ exposure, then the same questions broken down by category, gender and brand |
+| `Comparison` | One row per product, frozen header + autofilter, real number formats (sums work), red/green fills on position and gap |
+| `Action List` | Only the SKUs a rival undercuts, worst first — omitted when it would duplicate sheet 2 |
+
+**Filters** are dropdown menus — multi-select for category, gender and brand
+(with a search box once a list runs long), single-select for position, match
+status and freshness, plus a price band and free-text search. All combinable,
+all reflected in the filename and in the file itself. The dialog shows the row
+count, the ₹ exposure and a five-row sample **before** building anything — no
+one should have to open a file to discover it was empty.
+
+The PDF leads with a KPI strip and a **who-is-cheapest / who-is-dearest split
+by platform**, then the largest gaps, then the full table across landscape
+pages. It needs a font carrying ₹, so the API image installs `font-noto`; the
+exporter falls back to "Rs." rather than printing blank boxes if that is ever
+missing.
+
+Category and gender are derived, not stored: category from the PDP breadcrumb
+then the brand-stripped title (the taxonomy's garment rules, so extending
+`taxonomy.custom.json` extends the filter too). Gender reads the title and
+breadcrumb only — the CLIQ category code is *not* a gender marker on this
+catalog (`MSH10` holds women's product), so a product that never says gets
+`Unspecified` rather than a confident wrong answer.
+
 ## API
 
 | Method | Route | Description |
@@ -184,6 +238,10 @@ correctness.
 | `GET` | `/api/products/:id/report` | **Full comparison report** (`?refresh=true` re-matches) |
 | `POST` | `/api/products/:id/match` | Force a fresh live re-match |
 | `GET` | `/api/brands` | Brand facets |
+| `GET` | `/api/export/facets` | Export filter vocabulary with counts (only values that have rows) |
+| `GET` | `/api/export/preview?…` | Row count, ₹ exposure and a sample for a filter set — no file built |
+| `GET` | `/api/export/comparisons.xlsx?…` | **The workbook.** `category`, `gender`, `brand` (repeatable or comma-separated), `position`, `matched`, `freshOnly`, `minPrice`, `maxPrice`, `q` |
+| `GET` | `/api/export/comparisons.pdf?…` | **The PDF report.** Same filter vocabulary, same rows |
 
 ## Project layout
 
@@ -195,13 +253,14 @@ apps/
                    semantic · imagecolor · imagesim · http · format
       sources/     tatacliq · myntra · ajio      (each: listing tier + detail tier)
       matching/    evidence (gates + weights) · matcher (orchestration) · report (builder)
-      routes/      products · meta
+      export/      rows (comparison → business row) · workbook (xlsx) · pdf (report)
+      routes/      products · export · meta
       store.mjs    in-memory catalog, comparison cache, IDF training
     scripts/       ingest-cliq · match-competitors · audit-accuracy · test-proxy
                    verify-gender · verify-lp · imgcolor-test
   web/
-    app/           dashboard · report/[id] (deep-linkable, print-optimised)
-    components/    MatchReport · CompareModal · UrlLookup · ThemeToggle · StatsBar · …
+    app/           dashboard · reports (saved) · report/[id] (deep-linkable, print-optimised)
+    components/    MatchReport · CompareModal · ExportModal · UrlLookup · ThemeToggle · StatsBar · …
 ```
 
 ### Extending to a new category — zero code

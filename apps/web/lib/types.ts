@@ -232,3 +232,61 @@ export interface SavedReportPage {
   freshCount: number;
   items: SavedReport[];
 }
+
+// ── Excel export ──────────────────────────────────────────────
+
+/** One selectable filter value, with how many saved comparisons carry it. */
+export interface Facet {
+  value: string;
+  label: string;
+  count: number;
+}
+
+export interface ExportFacets {
+  total: number;
+  categories: Facet[];
+  genders: Facet[];
+  brands: Facet[];
+  positions: Facet[];
+  matchedCount: number;
+  freshCount: number;
+  priceRange: { min: number; max: number } | null;
+}
+
+/** Competitive position of CLIQ against the cheapest matched rival. */
+export type Posture = 'all' | 'undercut' | 'winning' | 'parity';
+
+/** Both formats carry the same rows; they differ in who reads them. */
+export type ExportFormat = 'xlsx' | 'pdf';
+
+export interface ExportFilters {
+  q: string;
+  categories: string[];
+  genders: string[];
+  brands: string[];
+  position: Posture;
+  matched: 'all' | 'matched' | 'unmatched';
+  freshOnly: boolean;
+  minPrice: number | null;
+  maxPrice: number | null;
+}
+
+/** What a filter set selects, answered before the workbook is built. */
+export interface ExportPreview {
+  count: number;
+  matched: number;
+  undercut: number;
+  cliqCheapest: number;
+  totalGap: number;
+  filename: string;
+  pdfFilename: string;
+  description: string;
+  sample: {
+    brand: string | null;
+    title: string | null;
+    categoryLabel: string;
+    cliqPrice: number | null;
+    priceGap: number | null;
+    position: string;
+  }[];
+}

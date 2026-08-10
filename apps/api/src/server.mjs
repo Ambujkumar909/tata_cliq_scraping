@@ -10,6 +10,7 @@ import { store } from './store.mjs';
 import { persistence } from './cache/persistence.mjs';
 import metaRoutes from './routes/meta.mjs';
 import productRoutes from './routes/products.mjs';
+import exportRoutes from './routes/export.mjs';
 
 async function build() {
   const app = Fastify({
@@ -21,6 +22,7 @@ async function build() {
 
   app.register(metaRoutes, { prefix: '/api' });
   app.register(productRoutes, { prefix: '/api' });
+  app.register(exportRoutes, { prefix: '/api' });
 
   app.get('/', async () => ({ name: 'PriceLens API', docs: '/api/health' }));
 

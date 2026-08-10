@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Archive, Zap } from 'lucide-react';
+import { Archive, Zap, FileSpreadsheet } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Comparison, ProductListItem, Stats } from '@/lib/types';
 import { Logo } from '@/components/ui';
@@ -13,6 +13,7 @@ import { UrlLookup } from '@/components/UrlLookup';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { ProductCard } from '@/components/ProductCard';
 import { CompareModal } from '@/components/CompareModal';
+import { ExportModal } from '@/components/ExportModal';
 
 const PAGE_SIZE = 24;
 
@@ -26,6 +27,7 @@ export default function Home() {
   const [sort, setSort] = useState('relevance');
   const [comparedOnly, setComparedOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   // Bumped whenever a comparison lands, so the derived panels refetch instead of
   // showing the figures they happened to load with.
   const [dataVersion, setDataVersion] = useState(0);
@@ -93,6 +95,12 @@ export default function Home() {
           <span className="chip hidden bg-slate-100 dark:bg-white/[0.06] sm:inline-flex">
             <Zap size={12} className="text-amber-500 dark:text-gold" /> Live from CLIQ · Myntra · Ajio
           </span>
+          <button
+            onClick={() => setExporting(true)}
+            className="flex items-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-2 font-semibold text-white transition hover:bg-emerald-700"
+          >
+            <FileSpreadsheet size={13} /> Export
+          </button>
           <Link
             href="/reports"
             className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3.5 py-2 font-medium text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.12] dark:hover:text-white"
@@ -194,6 +202,8 @@ export default function Home() {
       {openId ? (
         <CompareModal productId={openId} onClose={() => setOpenId(null)} onCompared={handleCompared} />
       ) : null}
+
+      {exporting ? <ExportModal onClose={() => setExporting(false)} /> : null}
     </main>
   );
 }
