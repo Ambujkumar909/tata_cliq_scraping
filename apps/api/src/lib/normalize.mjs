@@ -65,6 +65,19 @@ export function detectGender(text) {
   if (/\b(unisex)\b/.test(t)) return 'unisex';
   return null;
 }
+/**
+ * Gender from a category code whose FIRST LETTER encodes it (M/W/B/G).
+ *
+ * ⚠ Not every retailer's codes work this way, and Tata CLIQ's do not. CLIQ
+ * merchandise codes look like `MSH10` / `MSH11` / `MSH21`, where the prefix is
+ * a hierarchy id, not a gender: `MSH10` holds "ADIDAS Women's Purple TR-ES CREW
+ * T-Shirt" as well as menswear. Applying this to a CLIQ code answers "men" for
+ * every product, which is worse than answering nothing — see the matcher, which
+ * reads CLIQ's PDP gender field and breadcrumb instead.
+ *
+ * Kept for retailers whose codes genuinely carry the prefix; do not wire it in
+ * without first checking a real sample of that retailer's codes.
+ */
 export function genderFromCategory(code) {
   if (!code) return null;
   const c = String(code).toUpperCase();

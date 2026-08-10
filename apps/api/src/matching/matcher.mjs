@@ -1,5 +1,9 @@
 /**
- * Anchored matching engine (v4) — layered retrieval → gates → evidence.
+ * Anchored matching engine (v5) — layered retrieval → gates → evidence.
+ *
+ * v5 changes only how the anchor's gender is resolved (read from the PDP, never
+ * inferred from a category code — see enrichAnchor); the evidence model itself
+ * is unchanged v4.
  *
  *   Layer 1  RETRIEVAL   Union several complementary queries per source, then
  *                        rely on the structured facets each platform publishes
@@ -22,7 +26,7 @@ import { searchMyntra, fetchMyntraDetail } from '../sources/myntra.mjs';
 import { searchAjio, fetchAjioDetail } from '../sources/ajio.mjs';
 import { fetchCliqDetail } from '../sources/tatacliq.mjs';
 import {
-  buildQueries, detectGender, genderFromCategory, detectGarment, stripBrand, normalizeText,
+  buildQueries, detectGender, detectGarment, stripBrand, normalizeText,
 } from '../lib/normalize.mjs';
 import { hardGates, cheapEvidence, fullEvidence, classify, explain } from './evidence.mjs';
 import { fetchImageSignature, regionForGarment } from '../lib/imagesim.mjs';
@@ -104,13 +108,47 @@ function garmentFromCategoryPath(path) {
   return null;
 }
 
+/**
+ * Resolve gender from the PDP, exactly as the garment is resolved from it.
+ *
+ * CLIQ publishes gender two ways — a `gender` field ("Men") and the breadcrumb
+ * ("Men's Clothing > …") — and both are statements CLIQ makes about the
+ * product, so either beats inference. Neither is guaranteed: some PDPs return a
+ * null gender and an empty hierarchy, and for those the answer is genuinely
+ * UNKNOWN.
+ *
+ * Null is a safe answer here. genderCompatible() treats unknown on either side
+ * as "do not reject", so an unresolved gender disarms the gate instead of
+ * arming it backwards, and buildQueries() omits the word instead of searching
+ * the wrong department.
+ */
+function genderFromDetail(detail) {
+  const stated = detectGender(detail?.gender || '');
+  if (stated) return stated;
+  for (const crumb of Array.isArray(detail?.categoryPath) ? detail.categoryPath : []) {
+    const g = detectGender(crumb);
+    if (g) return g;
+  }
+  return null;
+}
+
+/**
+ * Pre-detail enrichment: only what the listing record alone can support.
+ *
+ * The CLIQ category code is deliberately NOT consulted. genderFromCategory()
+ * reads a code's first letter as its gender, and CLIQ's merchandise hierarchy
+ * does not work that way — `MSH10` carries "ADIDAS Women's Purple TR-ES CREW
+ * T-Shirt" and "Outzidr Womens Red Slim Fit Solid Top" alongside menswear. Used
+ * as a fallback it did not fill gaps, it filled them WRONGLY: every title that
+ * never says its gender came back "men", which then armed the gender hard gate
+ * against the correct candidates AND put "men" into the competitor search
+ * query. A women's top searched as a men's top finds nothing, and reports NO
+ * MATCH for a product both rivals actually sell.
+ */
 function enrichAnchor(anchor) {
   return {
     ...anchor,
-    gender:
-      anchor.gender ||
-      detectGender(`${anchor.brand} ${anchor.title}`) ||
-      genderFromCategory(anchor.category?.l1),
+    gender: anchor.gender || detectGender(`${anchor.brand} ${anchor.title}`),
     garment: detectGarment(stripBrand(anchor.title, anchor.brand), anchor.articleType),
   };
 }
@@ -369,6 +407,7 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
     ...anchor,
     categoryPath: detail?.categoryPath ?? [],
     garment: anchor.garment || garmentFromCategoryPath(detail?.categoryPath),
+    gender: anchor.gender || genderFromDetail(detail),
   };
   const imageRegion = regionForGarment(resolved.garment);
   const imageSig = await fetchImageSignature(anchor.image, { region: imageRegion });
@@ -390,7 +429,11 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
 
   return {
     anchor: {
-      id: anchor.id, brand: anchor.brand, title: anchor.title, color: anchor.color, gender: anchor.gender,
+      // `resolved`, not `anchor` — gender and garment are only settled once the
+      // PDP has been read, and the saved comparison must record what actually
+      // gated the match, not the pre-detail guess.
+      id: anchor.id, brand: anchor.brand, title: anchor.title, color: anchor.color,
+      gender: resolved.gender, garment: resolved.garment,
       mrp: anchor.mrp, price: anchor.price, currency: anchor.currency,
       discountPercent: anchor.discountPercent,
       rating: detail?.rating ?? anchor.rating,

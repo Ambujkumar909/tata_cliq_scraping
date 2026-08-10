@@ -9,6 +9,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { matchMany } from '../src/matching/matcher.mjs';
+import { fingerprint } from '../src/cache/persistence.mjs';
 import { buildIdf } from '../src/lib/semantic.mjs';
 import { config } from '../src/config.mjs';
 
@@ -68,7 +69,13 @@ async function main() {
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(
     OUT,
-    JSON.stringify({ count: results.length, generatedAt: new Date().toISOString(), results }, null, 2),
+    // Stamp the engine identity: the store refuses a snapshot built by a
+    // different matcher rather than replaying verdicts it would not reach.
+    JSON.stringify(
+      { count: results.length, generatedAt: new Date().toISOString(), fingerprint: fingerprint(), results },
+      null,
+      2,
+    ),
   );
 
   const pc = (n) => `${Math.round((n / results.length) * 100)}%`;

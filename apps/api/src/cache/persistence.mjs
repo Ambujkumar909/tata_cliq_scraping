@@ -35,7 +35,11 @@ const ANCHOR_KEY = (id) => `${PREFIX}:anchor:${id}`;
  * the current configuration would never have reached. Bump MATCHER_VERSION
  * whenever matcher/evidence logic changes in a way that alters verdicts.
  */
-export const MATCHER_VERSION = 'v4';
+// v5: anchor gender comes from the CLIQ PDP (gender field / breadcrumb) instead
+// of the category code's first letter. That changes which candidates survive the
+// gender gate and what is sent to the competitor search, so every v4 comparison
+// is a verdict the current engine would not necessarily reach — orphan them.
+export const MATCHER_VERSION = 'v5';
 export const fingerprint = () =>
   `${MATCHER_VERSION}-s${config.strictSku ? 1 : 0}-m${String(config.matchMinScore).replace('.', '')}`;
 

@@ -1,7 +1,7 @@
 /**
  * Product Match Comparison Report.
  *
- * Shapes a v4 comparison into the report structure: a source header, five
+ * Shapes a comparison into the report structure: a source header, five
  * banded row-groups (Product · Pricing & Offers · Specifications · Content
  * Quality · AI Comparison Scores), and an AI Decision Summary.
  *
@@ -462,7 +462,7 @@ function header(cols, summary) {
 }
 
 /**
- * Build the full report from a v4 comparison object.
+ * Build the full report from a comparison object.
  * Pure and synchronous — all network work happened during matching.
  */
 export function buildReport(cmp) {
