@@ -107,11 +107,20 @@ function InsightList({
   );
 }
 
-export function Intelligence({ stats, onOpen }: { stats: Stats | null; onOpen: (id: string) => void }) {
+export function Intelligence({
+  stats,
+  onOpen,
+  version = 0,
+}: {
+  stats: Stats | null;
+  onOpen: (id: string) => void;
+  /** Bumped by the dashboard when a comparison lands, to refetch the lists. */
+  version?: number;
+}) {
   const [ins, setIns] = useState<Insights | null>(null);
   useEffect(() => {
     api.insights(12).then(setIns).catch(() => {});
-  }, []);
+  }, [version]);
 
   return (
     <section className="mt-8 flex flex-col gap-4">

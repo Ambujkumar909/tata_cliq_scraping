@@ -1,9 +1,10 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Github, Zap } from 'lucide-react';
+import { Archive, Zap } from 'lucide-react';
 import { api } from '@/lib/api';
-import type { ProductListItem, Stats } from '@/lib/types';
+import type { Comparison, ProductListItem, Stats } from '@/lib/types';
 import { Logo } from '@/components/ui';
 import { StatsBar } from '@/components/StatsBar';
 import { Intelligence } from '@/components/Intelligence';
@@ -25,10 +26,38 @@ export default function Home() {
   const [sort, setSort] = useState('relevance');
   const [comparedOnly, setComparedOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Bumped whenever a comparison lands, so the derived panels refetch instead of
+  // showing the figures they happened to load with.
+  const [dataVersion, setDataVersion] = useState(0);
   const debounce = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     api.stats().then(setStats).catch(() => {});
+  }, [dataVersion]);
+
+  /**
+   * A new comparison invalidates three things at once: the KPI cards, the
+   * insight lists, and the compared product's own card. The card is patched
+   * from the response in hand rather than refetched — a full page refetch would
+   * reset an infinite-scrolled list back to page one.
+   */
+  const handleCompared = useCallback((id: string, cmp: Comparison) => {
+    setItems((prev) =>
+      prev.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              comparison: {
+                matchedCount: cmp.summary.matchedCount,
+                prices: cmp.summary.prices,
+                cheapest: cmp.summary.cheapest,
+                matchedAt: cmp.matchedAt,
+              },
+            }
+          : p,
+      ),
+    );
+    setDataVersion((v) => v + 1);
   }, []);
 
   const fetchPage = useCallback(
@@ -61,19 +90,25 @@ export default function Home() {
       <nav className="flex items-center justify-between">
         <Logo />
         <div className="flex items-center gap-2 text-xs text-slate-400 dark:text-white/40">
-          <span className="chip bg-slate-100 dark:bg-white/[0.06]">
+          <span className="chip hidden bg-slate-100 dark:bg-white/[0.06] sm:inline-flex">
             <Zap size={12} className="text-amber-500 dark:text-gold" /> Live from CLIQ · Myntra · Ajio
           </span>
+          <Link
+            href="/reports"
+            className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3.5 py-2 font-medium text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 dark:bg-white/[0.06] dark:text-white/70 dark:hover:bg-white/[0.12] dark:hover:text-white"
+          >
+            <Archive size={13} /> Saved reports
+          </Link>
           <ThemeToggle />
         </div>
       </nav>
 
       {/* Hero */}
-      <section className="mt-10 mb-8">
+      <section className="mt-12 mb-10 text-center">
         <motion.h1
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="max-w-3xl font-display text-4xl font-extrabold leading-[1.05] tracking-tight text-slate-900 dark:text-white sm:text-6xl"
+          className="mx-auto max-w-4xl text-balance font-display text-4xl font-extrabold leading-[1.05] tracking-tight text-slate-900 dark:text-white sm:text-6xl"
         >
           Every CLIQ product,{' '}
           <span className="bg-gradient-to-r from-cliq via-myntra to-ajio bg-clip-text text-transparent">
@@ -84,10 +119,10 @@ export default function Home() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="mt-4 max-w-2xl text-base text-slate-500 dark:text-white/50 sm:text-lg"
+          className="mx-auto mt-5 max-w-xl text-balance text-base text-slate-500 dark:text-white/50 sm:text-lg"
         >
-          PriceLens finds the same item on Myntra and Ajio for every Tata CLIQ listing — so you know,
-          instantly, where you win on price and where dealers undercut you.
+          Matched live against Myntra and Ajio — see exactly where you win on price, and where
+          dealers undercut you.
         </motion.p>
       </section>
 
@@ -97,7 +132,7 @@ export default function Home() {
         <StatsBar stats={stats} />
       </div>
 
-      <Intelligence stats={stats} onOpen={setOpenId} />
+      <Intelligence stats={stats} onOpen={setOpenId} version={dataVersion} />
 
       <div id="catalog" className="mt-12">
         <Controls
@@ -156,7 +191,9 @@ export default function Home() {
         </p>
       </footer>
 
-      {openId ? <CompareModal productId={openId} onClose={() => setOpenId(null)} /> : null}
+      {openId ? (
+        <CompareModal productId={openId} onClose={() => setOpenId(null)} onCompared={handleCompared} />
+      ) : null}
     </main>
   );
 }

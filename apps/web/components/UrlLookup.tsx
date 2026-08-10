@@ -103,9 +103,8 @@ export function UrlLookup() {
         </AnimatePresence>
       </form>
 
-      <p className="mt-2 px-1 text-[11px] text-slate-400 dark:text-white/40">
-        Any CLIQ product works — even one that isn&apos;t in the ingested catalog. Matching runs live
-        against Myntra and Ajio.
+      <p className="mt-2.5 text-center text-[11px] text-slate-400 dark:text-white/40">
+        Works for any CLIQ product — even one outside the catalog.
       </p>
     </section>
   );

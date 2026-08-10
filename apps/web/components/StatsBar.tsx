@@ -8,13 +8,17 @@ function Counter({ to, suffix = '' }: { to: number; suffix?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true });
   const [val, setVal] = useState(0);
+  // Where the last animation ended. A KPI that updates after a comparison must
+  // tick 2 → 3, not drop to zero and count back up as if the page just loaded.
+  const from = useRef(0);
   useEffect(() => {
     if (!inView) return;
-    const controls = animate(0, to, {
-      duration: 1.2,
+    const controls = animate(from.current, to, {
+      duration: from.current === 0 ? 1.2 : 0.5,
       ease: 'easeOut',
       onUpdate: (v) => setVal(v),
     });
+    from.current = to;
     return () => controls.stop();
   }, [inView, to]);
   return (

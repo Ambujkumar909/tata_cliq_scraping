@@ -83,6 +83,43 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #37375a; }
     margin: 6mm 6mm;
   }
 
+  /* ── SCOPE: THE REPORT, AND NOTHING ELSE ───────────────────
+     The report is reachable from two places — the standalone /report/[id]
+     page and the dashboard modal — so print scoping is done structurally
+     rather than per-page: everything that is neither the report root
+     (.report-scale), nor inside it, nor an ancestor of it, is dropped.
+     Without this, printing from the dashboard emitted the whole landing
+     page (hero, catalog grid, …) and the modal-borne report was itself
+     hidden by the `.fixed` rule below. */
+  body *:not(:has(.report-scale)):not(.report-scale):not(.report-scale *) {
+    display: none !important;
+  }
+
+  /* The surviving ancestor chain (main → modal overlay → scroll panel …)
+     carries viewport styling — fixed positioning, 92vh scroll clamp,
+     backdrop blur — that is meaningless on paper and would clip the
+     report. Flatten it to plain flow so the report owns the sheet. */
+  body :has(.report-scale) {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    z-index: auto !important;
+    overflow: visible !important;
+    max-height: none !important;
+    max-width: none !important;
+    width: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+
   /* ── ONE-PAGE COMPACT MODE ─────────────────────────────────
      The whole report must land on a single A4 landscape sheet.
      Strategy: keep the on-screen two-column layout (table + sidebar),

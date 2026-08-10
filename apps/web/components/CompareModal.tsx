@@ -156,7 +156,20 @@ function PriceColumn({
   );
 }
 
-export function CompareModal({ productId, onClose }: { productId: string; onClose: () => void }) {
+export function CompareModal({
+  productId,
+  onClose,
+  onCompared,
+}: {
+  productId: string;
+  onClose: () => void;
+  /**
+   * Fired whenever a comparison lands. Comparing a product changes the
+   * dashboard's KPIs, insights and that product's card, none of which refetch
+   * on their own — without this they keep showing the numbers from page load.
+   */
+  onCompared?: (id: string, cmp: Comparison) => void;
+}) {
   const [data, setData] = useState<Comparison | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -168,12 +181,13 @@ export function CompareModal({ productId, onClose }: { productId: string; onClos
       try {
         const d = await api.product(productId, refresh);
         setData(d);
+        onCompared?.(productId, d);
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [productId],
+    [productId, onCompared],
   );
 
   useEffect(() => {
