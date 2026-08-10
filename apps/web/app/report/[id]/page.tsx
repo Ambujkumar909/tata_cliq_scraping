@@ -1,6 +1,6 @@
 'use client';
 import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Archive } from 'lucide-react';
 import { MatchReport } from '@/components/MatchReport';
 import { Logo } from '@/components/ui';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -16,6 +16,12 @@ export default function ReportPage({ params }: { params: { id: string } }) {
       <nav className="no-print mb-6 flex items-center justify-between">
         <Logo />
         <div className="flex items-center gap-2">
+          <Link
+            href="/reports"
+            className="flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/[0.06] px-3.5 py-2 text-xs font-medium text-slate-600 dark:text-white/70 transition hover:bg-slate-200 dark:hover:bg-white/[0.12] hover:text-slate-900 dark:hover:text-white"
+          >
+            <Archive size={13} /> Saved reports
+          </Link>
           <Link
             href="/"
             className="flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/[0.06] px-3.5 py-2 text-xs font-medium text-slate-600 dark:text-white/70 transition hover:bg-slate-200 dark:hover:bg-white/[0.12] hover:text-slate-900 dark:hover:text-white"

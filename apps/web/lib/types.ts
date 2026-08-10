@@ -171,7 +171,11 @@ export interface MatchReport {
   kind: string;
   generatedAt: string;
   matchedAt: string | null;
+  /** True when this report replayed a saved comparison instead of re-scraping. */
   cached?: boolean;
+  savedAt?: string | null;
+  ageHours?: number | null;
+  ttlHours?: number;
   header: {
     listingId: string | null;
     url: string | null;
@@ -195,4 +199,36 @@ export interface ProductPage {
   pageSize: number;
   totalPages: number;
   items: ProductListItem[];
+}
+
+/** One row of the saved-reports list. */
+export interface SavedReport {
+  id: string;
+  brand: string | null;
+  title: string | null;
+  image: string | null;
+  url: string | null;
+  matchType: string;
+  confidence: number | null;
+  bestPlatform: Platform | null;
+  matchedCount: number;
+  prices: Partial<Record<Platform, number>>;
+  cheapest: { platform: Platform; price: number } | null;
+  matchedAt: string | null;
+  ageHours: number | null;
+  /** Within the TTL — a stale row re-scrapes on next open. */
+  fresh: boolean;
+  expiresInHours: number | null;
+  /** 'link' means it was pasted in, so it never appears in the catalog grid. */
+  source: 'catalog' | 'link';
+}
+
+export interface SavedReportPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  ttlHours: number;
+  freshCount: number;
+  items: SavedReport[];
 }

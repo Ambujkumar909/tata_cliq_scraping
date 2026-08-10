@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Tag, IndianRupee, FileText, Layers, Brain, CheckCircle2, AlertTriangle,
-  Lightbulb, ExternalLink, RefreshCw, Ban, Info, Printer, ShieldCheck,
+  Lightbulb, ExternalLink, RefreshCw, Ban, Info, Printer, ShieldCheck, Archive, Zap,
 } from 'lucide-react';
 import type { MatchReport as Report, ReportGroup, ReportRow, ReportCell, Verdict, ReportColumn } from '@/lib/types';
 import { api, PLATFORM_META } from '@/lib/api';
@@ -24,6 +24,16 @@ const GROUP_ICON: Record<string, { icon: typeof Tag; color: string }> = {
   specifications: { icon: Layers, color: '#38bdf8' },
   content: { icon: FileText, color: '#f59e0b' },
   scores: { icon: Brain, color: '#a855f7' },
+};
+
+// "matched 3.4h ago" reads as staler than "matched 3 hours ago" is meant to —
+// round to the unit a merchandiser actually thinks in.
+const freshness = (ageHours?: number | null) => {
+  if (ageHours == null) return 'earlier';
+  if (ageHours < 1 / 60) return 'moments ago';
+  if (ageHours < 1) return `${Math.round(ageHours * 60)} min ago`;
+  if (ageHours < 24) return `${Math.round(ageHours)} h ago`;
+  return `${Math.round(ageHours / 24)} d ago`;
 };
 
 const matchTypeTone = (t?: string | null) =>
@@ -240,6 +250,21 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
         <p className="print-only mt-1 text-xs text-slate-500 dark:text-white/50">
           {header.brand} · {header.title} · Listing {header.listingId} · Generated{' '}
           {new Date(data.generatedAt).toLocaleString('en-IN')}
+        </p>
+        {/* Where these prices came from. A replayed report is cheap and instant,
+            but the user has to know it is a recording, not a live quote. */}
+        <p className="no-print mt-1 text-[11px] text-slate-400 dark:text-white/40">
+          {data.cached ? (
+            <>
+              <Archive size={11} className="mr-1 inline align-[-1px]" />
+              Saved report · matched {freshness(data.ageHours)} · re-scrapes after {data.ttlHours ?? 24}h
+            </>
+          ) : (
+            <>
+              <Zap size={11} className="mr-1 inline align-[-1px] text-amber-500" />
+              Matched live just now · saved for the next {data.ttlHours ?? 24}h
+            </>
+          )}
         </p>
         <button
           onClick={() => window.print()}
@@ -512,6 +537,7 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
         ) : null}
         <span className="print-only ml-auto text-[9px] text-slate-400 dark:text-white/40">
           PriceLens · matched {data.matchedAt ? new Date(data.matchedAt).toLocaleString('en-IN') : '—'}
+          {data.cached ? ' · saved report' : ''}
         </span>
       </div>
     </div>

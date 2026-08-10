@@ -1,4 +1,6 @@
-import type { ProductPage, Comparison, Stats, Insights, MatchReport, ResolveResult } from './types';
+import type {
+  ProductPage, Comparison, Stats, Insights, MatchReport, ResolveResult, SavedReportPage,
+} from './types';
 
 const BASE =
   process.env.NEXT_PUBLIC_API_BASE ||
@@ -41,6 +43,10 @@ export const api = {
 
   report: (id: string, refresh = false) =>
     get<MatchReport>(`/products/${id}/report`, refresh ? { refresh: true } : undefined),
+
+  /** Every comparison already generated and saved, newest first. */
+  savedReports: (params: { q?: string; page?: number; pageSize?: number; freshOnly?: boolean } = {}) =>
+    get<SavedReportPage>('/reports', params as Record<string, string | number | boolean>),
 
   stats: () => get<Stats>('/stats'),
 
