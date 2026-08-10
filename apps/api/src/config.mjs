@@ -18,4 +18,15 @@ export const config = {
    */
   strictSku: process.env.STRICT_SKU !== 'false',
   httpTimeoutMs: Number(process.env.HTTP_TIMEOUT_MS || 20000),
+
+  /**
+   * How long a saved comparison is reused before the next view re-scrapes it.
+   *
+   * A comparison is expensive (three storefronts + image hashing), so it is
+   * persisted and replayed rather than recomputed. It cannot be kept forever
+   * though: this is a *pricing* tool, and Myntra/Ajio prices move daily, so a
+   * week-old saved price would be reported as today's. 24h is the compromise;
+   * "Refresh live" always bypasses it.
+   */
+  reportTtlHours: Number(process.env.REPORT_TTL_HOURS || 24),
 };

@@ -7,6 +7,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import { config } from './config.mjs';
 import { store } from './store.mjs';
+import { persistence } from './cache/persistence.mjs';
 import metaRoutes from './routes/meta.mjs';
 import productRoutes from './routes/products.mjs';
 
@@ -29,6 +30,17 @@ async function build() {
 async function main() {
   await store.load();
   const app = await build();
+
+  // Flush the pending comparison snapshot before the process goes away —
+  // docker stop must not discard matches that were just paid for.
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.once(sig, async () => {
+      await app.close().catch(() => {});
+      await persistence.close();
+      process.exit(0);
+    });
+  }
+
   try {
     await app.listen({ port: config.port, host: config.host });
   } catch (err) {

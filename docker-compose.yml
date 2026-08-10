@@ -23,17 +23,33 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # Every tunable is read from ./.env with the documented default as fallback.
+    # Hardcoding them here would silently ignore .env — the file the README
+    # tells you to edit — which is how STRICT_SKU used to have no effect.
     environment:
       NODE_ENV: production
       PORT: 4010
       REDIS_URL: redis://redis:6379
-      CORS_ORIGIN: http://localhost:3000
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
       # Fetching / scraping tuning (pure HTTP — no headless browser)
-      HTTP_TIMEOUT_MS: 20000
-      MATCH_MIN_SCORE: "0.58"
-      INGEST_TARGET_COUNT: "2000"
+      HTTP_TIMEOUT_MS: ${HTTP_TIMEOUT_MS:-20000}
+      SCRAPE_PROXY: ${SCRAPE_PROXY:-}
+      PROXY_HOSTS: ${PROXY_HOSTS:-ajio.com}
+      # Matching
+      MATCH_MIN_SCORE: ${MATCH_MIN_SCORE:-0.58}
+      STRICT_SKU: ${STRICT_SKU:-true}
+      INGEST_TARGET_COUNT: ${INGEST_TARGET_COUNT:-2000}
+      # Saved comparisons are replayed for this long before re-scraping.
+      REPORT_TTL_HOURS: ${REPORT_TTL_HOURS:-24}
+      CACHE_DIR: /app/cache
     ports:
       - "4010:4010"
+    volumes:
+      # Holds the on-disk comparison snapshot (the fallback used when Redis is
+      # unreachable) across image rebuilds. Deliberately NOT /app/data: a volume
+      # mounted there would shadow the baked-in catalog and pin it to whatever
+      # the first run copied in.
+      - api-cache:/app/cache
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:4010/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
@@ -61,3 +77,4 @@ services:
 
 volumes:
   redis-data:
+  api-cache:

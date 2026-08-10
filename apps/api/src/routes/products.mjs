@@ -2,6 +2,7 @@ import { store } from '../store.mjs';
 import { matchAnchor } from '../matching/matcher.mjs';
 import { buildReport } from '../matching/report.mjs';
 import { parseCliqProductId, fetchCliqAnchor } from '../sources/tatacliq.mjs';
+import { ageHours } from '../cache/persistence.mjs';
 import { config } from '../config.mjs';
 
 export default async function productRoutes(fastify) {
@@ -27,7 +28,7 @@ export default async function productRoutes(fastify) {
       });
     }
 
-    const existing = store.get(id);
+    const existing = await store.resolve(id);
     if (existing) return { id, inCatalog: !existing._transient, product: store.withSummary(existing) };
 
     const res = await fetchCliqAnchor(id);
@@ -56,47 +57,75 @@ export default async function productRoutes(fastify) {
     });
   });
 
+  /**
+   * Fetch the comparison for an anchor, reusing a saved one when it is still
+   * within the TTL. A match costs three storefronts' worth of scraping, so the
+   * same product is never compared twice in a day unless explicitly refreshed.
+   */
+  async function comparisonFor(anchor, refresh) {
+    if (!refresh) {
+      const saved = await store.getFreshComparison(anchor.id);
+      if (saved) return { cmp: saved, cached: true };
+    }
+    const cmp = await matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku });
+    store.setComparison(anchor.id, cmp);
+    return { cmp, cached: false };
+  }
+
+  // Cache provenance the UI can be honest with: a replayed report says so, and
+  // says how old it is, instead of implying the prices were just fetched.
+  const provenance = (cmp, cached) => ({
+    cached,
+    savedAt: cmp.matchedAt,
+    ageHours: ageHours(cmp) == null ? null : Math.round(ageHours(cmp) * 10) / 10,
+    ttlHours: config.reportTtlHours,
+  });
+
   // Product detail with full 3-way comparison. Matches live on cache miss.
   fastify.get('/products/:id', async (req, reply) => {
-    const anchor = store.get(req.params.id);
+    const anchor = await store.resolve(req.params.id);
     if (!anchor) return reply.code(404).send({ error: 'product_not_found' });
 
-    let cmp = store.getComparison(anchor.id);
-    const refresh = req.query.refresh === 'true';
-    if (!cmp || refresh) {
-      cmp = await matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku });
-      store.setComparison(anchor.id, cmp);
-    }
-    return { ...cmp, cached: !refresh && !!cmp };
+    const { cmp, cached } = await comparisonFor(anchor, req.query.refresh === 'true');
+    return { ...cmp, ...provenance(cmp, cached) };
   });
 
   /**
    * Full Product Match Comparison Report.
-   * Matches live on cache miss; `?refresh=true` forces a re-match.
-   * The report itself is derived synchronously from the comparison, so a warm
-   * cache serves it without touching the network.
+   * Replays a saved comparison when one is fresh; matches live otherwise.
+   * `?refresh=true` forces a re-match. The report itself is derived
+   * synchronously from the comparison, so a hit never touches the network.
    */
   fastify.get('/products/:id/report', async (req, reply) => {
-    const anchor = store.get(req.params.id);
+    const anchor = await store.resolve(req.params.id);
     if (!anchor) return reply.code(404).send({ error: 'product_not_found' });
 
-    const refresh = req.query.refresh === 'true';
-    let cmp = store.getComparison(anchor.id);
-    const cached = Boolean(cmp) && !refresh;
-    if (!cached) {
-      cmp = await matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku });
-      store.setComparison(anchor.id, cmp);
-    }
-    return { ...buildReport(cmp), cached };
+    const { cmp, cached } = await comparisonFor(anchor, req.query.refresh === 'true');
+    return { ...buildReport(cmp), ...provenance(cmp, cached) };
   });
 
   // Force a fresh live match (bypasses cache).
   fastify.post('/products/:id/match', async (req, reply) => {
-    const anchor = store.get(req.params.id);
+    const anchor = await store.resolve(req.params.id);
     if (!anchor) return reply.code(404).send({ error: 'product_not_found' });
     const cmp = await matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku });
     store.setComparison(anchor.id, cmp);
     return cmp;
+  });
+
+  /**
+   * Every comparison already generated and saved, newest first.
+   * Backs the /reports page — including link-sourced products, which are the
+   * ones with no other route back.
+   */
+  fastify.get('/reports', async (req) => {
+    const { q = '', page = '1', pageSize = '24', freshOnly = 'false' } = req.query;
+    return store.savedReports({
+      q,
+      page: Math.max(1, Number(page)),
+      pageSize: Math.min(100, Math.max(1, Number(pageSize))),
+      freshOnly: freshOnly === 'true',
+    });
   });
 
   // Brand facet list.

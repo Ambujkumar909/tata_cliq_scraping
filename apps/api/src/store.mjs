@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { normalizeText } from './lib/normalize.mjs';
 import { buildIdf } from './lib/semantic.mjs';
+import { persistence, isFresh, ageHours } from './cache/persistence.mjs';
+import { config } from './config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA = resolve(__dirname, '..', 'data');
@@ -46,9 +48,24 @@ class Store {
       const { results } = JSON.parse(await readFile(cmpPath, 'utf8'));
       for (const r of results) this.comparisons.set(r.anchor.id, r);
     }
+
+    // Replay comparisons saved by earlier runs. They win over the shipped
+    // comparisons.json snapshot, which is a build-time artifact and therefore
+    // always the older of the two.
+    await persistence.init();
+    let replayed = 0;
+    for (const cmp of await persistence.hydrate()) {
+      this.comparisons.set(cmp.anchor.id, cmp);
+      // A pasted-URL product is not in the catalog; re-register it so its saved
+      // report stays reachable by id after a restart.
+      if (!this.byId.has(cmp.anchor.id)) this.addTransient({ ...cmp.anchor });
+      replayed++;
+    }
+
     this.loadedAt = new Date().toISOString();
     console.log(
-      `[store] loaded ${this.products.length} products, ${this.comparisons.size} comparisons, ${this.brands.size} brands`,
+      `[store] loaded ${this.products.length} products, ${this.comparisons.size} comparisons ` +
+        `(${replayed} replayed from cache), ${this.brands.size} brands`,
     );
   }
 
@@ -71,15 +88,45 @@ class Store {
     product._search = normalizeText(`${product.brand} ${product.title} ${product.color || ''}`);
     product._transient = true;
     this.byId.set(product.id, product);
+    persistence.saveAnchor(product).catch(() => {});
     return product;
+  }
+
+  /**
+   * Resolve a product by id, falling back to a durably-saved ad-hoc anchor.
+   * Covers the case where a shared /report/<id> link is opened in a process
+   * that never saw the original paste.
+   */
+  async resolve(id) {
+    const hit = this.byId.get(id);
+    if (hit) return hit;
+    const saved = await persistence.loadAnchor(id);
+    return saved ? this.addTransient(saved) : null;
   }
 
   getComparison(id) {
     return this.comparisons.get(id) || null;
   }
 
+  /**
+   * A saved comparison, but only while it is still within the TTL — past that
+   * its prices are history, not a quote. Falls through to the durable cache so
+   * an entry evicted from memory is still a hit.
+   */
+  async getFreshComparison(id) {
+    const local = this.comparisons.get(id);
+    if (local) return isFresh(local) ? local : null;
+    const saved = await persistence.load(id);
+    if (!saved) return null;
+    this.comparisons.set(id, saved); // warm memory for the catalog grid
+    return isFresh(saved) ? saved : null;
+  }
+
   setComparison(id, cmp) {
     this.comparisons.set(id, cmp);
+    // Write-through, non-blocking: persisting is an optimisation for the *next*
+    // request and must never delay or fail this one.
+    persistence.save(id, cmp).catch((err) => console.warn('[store] persist failed:', err.message));
   }
 
   query({ q = '', brand = '', page = 1, pageSize = 24, sort = 'relevance', comparedOnly = false } = {}) {
@@ -118,6 +165,70 @@ class Store {
             matchedAt: cmp.matchedAt,
           }
         : null,
+    };
+  }
+
+  /**
+   * Every saved comparison, newest first — the backing list for the /reports
+   * page.
+   *
+   * Reads the comparison map rather than the catalog on purpose: a product
+   * compared from a pasted link is deliberately absent from the catalog grid,
+   * and those are exactly the reports a user has no other way to find again.
+   */
+  savedReports({ q = '', page = 1, pageSize = 24, freshOnly = false } = {}) {
+    const nq = normalizeText(q);
+    const terms = nq ? nq.split(' ').filter(Boolean) : [];
+
+    let rows = [...this.comparisons.values()]
+      .filter((c) => c?.anchor?.id)
+      .map((c) => {
+        const competitors = Object.entries(c.competitors || {});
+        const matched = competitors.filter(([, m]) => m?.status === 'matched');
+        // Best = highest-scoring matched competitor; it defines the verdict the
+        // report leads with.
+        const best = matched.sort((a, b) => (b[1].score ?? 0) - (a[1].score ?? 0))[0];
+        const age = ageHours(c);
+        return {
+          id: c.anchor.id,
+          brand: c.anchor.brand ?? null,
+          title: c.anchor.title ?? null,
+          image: c.anchor.image ?? null,
+          url: c.anchor.url ?? null,
+          matchType: best?.[1]?.matchType ?? 'NO MATCH',
+          confidence: best?.[1]?.score ?? null,
+          bestPlatform: best?.[0] ?? null,
+          matchedCount: c.summary?.matchedCount ?? 0,
+          prices: c.summary?.prices ?? {},
+          cheapest: c.summary?.cheapest ?? null,
+          matchedAt: c.matchedAt ?? null,
+          ageHours: age == null ? null : Math.round(age * 10) / 10,
+          fresh: isFresh(c),
+          // How long this stays replayable. Negative would read as nonsense, so
+          // a stale entry reports 0: the next view re-scrapes it.
+          expiresInHours:
+            age == null ? null : Math.max(0, Math.round((config.reportTtlHours - age) * 10) / 10),
+          // Whether this product is in the ingested catalog or arrived as a link.
+          source: this.byId.get(c.anchor.id)?._transient ? 'link' : 'catalog',
+          _search: normalizeText(`${c.anchor.brand || ''} ${c.anchor.title || ''} ${c.anchor.id}`),
+        };
+      });
+
+    if (terms.length) rows = rows.filter((r) => terms.every((t) => r._search.includes(t)));
+    if (freshOnly) rows = rows.filter((r) => r.fresh);
+    rows.sort((a, b) => new Date(b.matchedAt || 0) - new Date(a.matchedAt || 0));
+
+    const total = rows.length;
+    const start = (page - 1) * pageSize;
+    const items = rows.slice(start, start + pageSize).map(({ _search, ...r }) => r);
+    return {
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize) || 1,
+      ttlHours: config.reportTtlHours,
+      freshCount: rows.filter((r) => r.fresh).length,
+      items,
     };
   }
 

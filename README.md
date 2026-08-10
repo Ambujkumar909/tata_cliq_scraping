@@ -133,12 +133,49 @@ Then paste any Tata CLIQ product link into the dashboard — products outside th
 | `SCRAPE_PROXY` | — | Indian residential proxy; unlocks Ajio's detail tier |
 | `PROXY_HOSTS` | `ajio.com` | Hosts routed through the proxy (suffix match) |
 | `HTTP_TIMEOUT_MS` | `20000` | Per-request deadline (every network call has one) |
+| `REPORT_TTL_HOURS` | `24` | How long a saved comparison is replayed before re-scraping |
+| `CACHE_DIR` | `apps/api/data` | Where the fallback comparison snapshot is written |
+
+Every one of these is read from `.env` by both `npm run dev` and `docker compose`
+(the compose file interpolates them rather than hardcoding), so `.env` is the
+single place to change behaviour.
+
+## Saved comparisons
+
+A comparison costs three storefronts' worth of scraping plus image hashing —
+seconds of wall time and a slice of the proxy budget — so **every generated
+comparison is persisted and replayed** instead of being recomputed:
+
+- **Written through** on every live match, to Redis (per-key TTL, named volume)
+  or to a JSON snapshot in `CACHE_DIR` when Redis is unreachable.
+- **Survives** API restarts, container rebuilds and redeploys; the store replays
+  the cache on boot, so the catalog grid keeps its comparison badges.
+- **Expires after `REPORT_TTL_HOURS`** (24h). This is a pricing tool: a saved
+  report is a recording, not a live quote, and the UI labels it as such
+  ("Saved report · matched 3 h ago"). **Refresh live** always bypasses it.
+- **Fingerprinted** by matcher version + `STRICT_SKU` + `MATCH_MIN_SCORE`, so
+  changing how matching works re-matches rather than serving verdicts the
+  current settings would never have produced.
+- **Ad-hoc anchors** (products pasted as URLs, absent from the catalog) are
+  persisted too, so a shared `/report/<id>` link keeps working after a restart.
+
+**Where to see them:** `/reports` lists every saved comparison — newest first,
+with match verdict, confidence, the three prices, how long ago it was matched
+and how much of its TTL is left. Searchable, filterable to still-fresh, and
+linked from the dashboard nav. It reads the comparison store rather than the
+catalog on purpose: link-sourced products are deliberately absent from the
+catalog grid, so this page is the only way back to those reports.
+
+Cache state is visible at `GET /api/cache`. Losing the cache costs time, never
+correctness.
 
 ## API
 
 | Method | Route | Description |
 |---|---|---|
 | `GET` | `/api/health` | Liveness + catalog size |
+| `GET` | `/api/cache` | Saved-comparison backend, entry count, TTL, fingerprint |
+| `GET` | `/api/reports?q=&page=&freshOnly=` | Saved comparisons, newest first (backs `/reports`) |
 | `GET` | `/api/stats` | Dashboard KPIs |
 | `GET` | `/api/insights?limit=` | Biggest dealer undercuts / CLIQ wins |
 | `GET` | `/api/resolve?url=` | Resolve a pasted CLIQ product link (fetches live if uncatalogued) |
