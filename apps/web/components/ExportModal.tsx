@@ -10,21 +10,23 @@
  *      the exposure, a sample. Nobody should build a file to find out what is
  *      in it, so the answer sits beside the controls rather than below them.
  *
- *   2. **Dropdowns, not chip walls.** One menu component serves both the
- *      multi-selects (category, gender, brand) and the single-selects
- *      (position, match, freshness), so every control behaves identically —
- *      hover, keyboard dismiss, flip-up near the viewport edge.
+ *   2. **Filters are additions, not form fields.** One menu component serves
+ *      every filter, presented as a dashed plus and a word rather than a boxed
+ *      select. Six bordered rectangles with six chevrons dominated a panel whose
+ *      subject is the data beside it; a light row of "+ Category" reads as an
+ *      invitation and takes a third of the space. Each trigger shows its own
+ *      value once set, so no summary strip has to repeat it.
  *
- *   3. **Motion earns its place.** Everything animated marks a state change
- *      you would otherwise have to look for: the segmented meter re-proportions,
- *      numbers roll, applied filters fly in and out, the primary button sweeps
+ *   3. **Motion earns its place.** Everything animated marks a state change you
+ *      would otherwise have to look for: the segmented meter re-proportions, the
+ *      count rolls, the plus turns 45° into a close, the primary button sweeps
  *      once when it becomes usable.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  X, FileSpreadsheet, FileText, Download, RotateCcw, Loader2, ChevronDown, Check,
-  Search, SlidersHorizontal, TrendingDown, Trophy, Minus,
+  X, FileSpreadsheet, FileText, Download, RotateCcw, Loader2, Plus, Check,
+  Search, TrendingDown, Trophy,
 } from 'lucide-react';
 import type { ExportFacets, ExportFilters, ExportFormat, ExportPreview, Facet, Posture } from '@/lib/types';
 import { api } from '@/lib/api';
@@ -80,17 +82,21 @@ function Rolling({ value, format }: { value: number; format?: (n: number) => str
 }
 
 /**
- * One dropdown for every filter. `multi` decides whether picking an option
- * toggles it or replaces the selection and closes.
+ * A filter, as an "add" affordance rather than a form control.
+ *
+ * No box and no chevron: an unset filter is a dashed plus and a word, which
+ * reads as an invitation instead of an empty field, and a row of them stays a
+ * light band across the panel rather than a wall of rectangles. Setting one
+ * fills the marker and shows the selection inline, so the bar always states the
+ * whole filter without a second summary strip repeating it.
  */
-function Dropdown({
-  label, options, selected, onChange, allLabel, multi = false, searchable = false, accent,
+function FilterMenu({
+  label, options, selected, onChange, multi = false, searchable = false, accent = '#e11d48',
 }: {
   label: string;
   options: Facet[];
   selected: string[];
   onChange: (next: string[]) => void;
-  allLabel: string;
   multi?: boolean;
   searchable?: boolean;
   accent?: string;
@@ -115,12 +121,11 @@ function Dropdown({
     };
   }, [open]);
 
-  // Open upward when there is not enough room below — otherwise the menu is
-  // clipped by the dialog's own scroll container.
+  // Open upward when the dialog's scroll container would clip the menu.
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
     const r = triggerRef.current.getBoundingClientRect();
-    setFlip(window.innerHeight - r.bottom < 260 && r.top > 280);
+    setFlip(window.innerHeight - r.bottom < 280 && r.top > 300);
   }, [open]);
 
   const shown = useMemo(
@@ -128,62 +133,90 @@ function Dropdown({
     [options, q],
   );
 
-  const summary = selected.length === 0
-    ? allLabel
-    : selected.length === 1
-      ? options.find((o) => o.value === selected[0])?.label ?? selected[0]
-      : `${selected.length} selected`;
+  const active = selected.length > 0;
+  const summary = selected.length === 1
+    ? options.find((o) => o.value === selected[0])?.label ?? selected[0]
+    : `${selected.length} selected`;
 
   const pick = (value: string) => {
     if (!multi) { onChange([value]); setOpen(false); return; }
     onChange(selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value]);
   };
 
-  const active = selected.length > 0;
-
   return (
     <div ref={ref} className="relative">
-      <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-white/35">
-        {label}
-      </span>
       <button
         ref={triggerRef}
         type="button"
         disabled={!options.length}
         onClick={() => setOpen((v) => !v)}
-        className={`group relative flex w-full items-center justify-between gap-2 overflow-hidden rounded-xl border px-3 py-2.5 text-left text-xs font-medium transition-all duration-200 disabled:opacity-40
+        className={`group relative flex items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2.5 text-xs font-medium transition-colors duration-200 disabled:opacity-40
           ${active
-            ? 'border-cliq/40 bg-cliq/[0.05] text-slate-900 shadow-[0_0_0_3px_rgba(225,29,72,0.06)] dark:text-white'
-            : 'border-slate-200 bg-white text-slate-600 hover:-translate-y-px hover:border-slate-300 hover:shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70 dark:hover:border-white/20 dark:hover:bg-white/[0.06]'}`}
+            ? 'text-slate-900 dark:text-white'
+            : 'text-slate-500 hover:text-slate-900 dark:text-white/45 dark:hover:text-white'}`}
       >
-        {/* Accent rail — a quiet way to show a filter is doing something. */}
+        {/* The marker: dashed ring + plus when unset, filled when set.
+            The transition names border-colour and text only. Both
+            `transition-all` and `transition-colors` include background-color,
+            which means the inline fill eases in from transparent — so the
+            marker is invisible until frames arrive, and reads as unset in a
+            background tab or under reduced motion. */}
         <span
-          className={`absolute inset-y-0 left-0 w-[2px] origin-top transition-transform duration-300 ${active ? 'scale-y-100' : 'scale-y-0'}`}
-          style={{ background: accent ?? '#e11d48' }}
-        />
-        <span className={`truncate ${active ? '' : 'text-slate-400 dark:text-white/40'}`}>
-          {options.length ? summary : 'None available'}
+          className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border transition-[border-color,color] duration-200
+            ${active
+              ? 'border-transparent text-white'
+              : 'border-dashed border-slate-300 text-slate-400 group-hover:border-solid group-hover:text-slate-700 dark:border-white/25 dark:text-white/40 dark:group-hover:border-white/50 dark:group-hover:text-white/80'}`}
+          style={active ? { background: accent } : undefined}
+        >
+          {active && multi && selected.length > 1 ? (
+            <span className="text-[9px] font-bold leading-none">{selected.length}</span>
+          ) : (
+            <Plus
+              size={11}
+              strokeWidth={2.6}
+              className={`transition-transform duration-300 ${open ? 'rotate-45' : 'group-hover:rotate-90'}`}
+            />
+          )}
         </span>
-        <span className="flex shrink-0 items-center gap-1.5">
-          {multi && selected.length > 1 ? (
-            <span className="rounded-full bg-cliq px-1.5 py-0.5 text-[9px] font-bold text-white">{selected.length}</span>
+
+        <span className="whitespace-nowrap">
+          {label}
+          {active ? (
+            <>
+              <span className="mx-1 text-slate-300 dark:text-white/20">&middot;</span>
+              <span style={{ color: accent }} className="font-semibold">{summary}</span>
+            </>
           ) : null}
-          <ChevronDown
-            size={13}
-            className={`text-slate-400 transition-transform duration-300 group-hover:text-slate-600 dark:group-hover:text-white/70 ${open ? 'rotate-180' : ''}`}
-          />
         </span>
+
+        {/* Hover / active underline — the only edge this control ever draws. */}
+        <span
+          className={`absolute inset-x-1.5 bottom-0 h-px origin-left rounded-full transition-transform duration-300
+            ${active ? 'scale-x-100' : 'scale-x-0 group-hover:scale-x-100'}`}
+          style={{ background: accent, opacity: active ? 1 : 0.4 }}
+        />
       </button>
+
+      {active ? (
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          aria-label={`Clear ${label}`}
+          className="absolute -right-3 top-1/2 grid h-4 w-4 -translate-y-1/2 place-items-center rounded-full text-slate-300 transition hover:bg-slate-100 hover:text-slate-700 dark:text-white/25 dark:hover:bg-white/10 dark:hover:text-white"
+        >
+          <X size={10} strokeWidth={3} />
+        </button>
+      ) : null}
 
       <AnimatePresence>
         {open ? (
           <motion.div
-            initial={{ opacity: 0, y: flip ? 6 : -6, scale: 0.98 }}
+            initial={{ opacity: 0, y: flip ? 6 : -6, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: flip ? 6 : -6, scale: 0.98 }}
+            exit={{ opacity: 0, y: flip ? 6 : -6, scale: 0.97 }}
             transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className={`absolute z-30 w-full min-w-[12rem] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-900/[0.08] dark:border-white/10 dark:bg-ink-800 dark:shadow-black/40 ${
-              flip ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+            className={`absolute left-0 z-30 w-60 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-900/[0.10] dark:border-white/10 dark:bg-ink-800 dark:shadow-black/50 ${
+              flip ? 'bottom-full mb-2' : 'top-full mt-2'
             }`}
           >
             {searchable && options.length > 8 ? (
@@ -193,22 +226,13 @@ function Dropdown({
                   autoFocus
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="Type to filter…"
+                  placeholder={`Filter ${label.toLowerCase()}…`}
                   className="w-full bg-transparent text-xs text-slate-900 outline-none placeholder:text-slate-400 dark:text-white dark:placeholder:text-white/30"
                 />
               </div>
             ) : null}
 
             <div className="max-h-56 overflow-y-auto py-1">
-              <button
-                type="button"
-                onClick={() => { onChange([]); if (!multi) setOpen(false); }}
-                className="group/i flex w-full items-center justify-between px-3 py-2 text-left text-xs text-slate-500 transition hover:bg-slate-50 dark:text-white/50 dark:hover:bg-white/[0.05]"
-              >
-                <span className="transition-transform duration-200 group-hover/i:translate-x-0.5">{allLabel}</span>
-                {selected.length === 0 ? <Check size={12} className="text-cliq" /> : null}
-              </button>
-
               {shown.map((o, i) => {
                 const on = selected.includes(o.value);
                 return (
@@ -222,22 +246,18 @@ function Dropdown({
                     className="group/i relative flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition hover:bg-slate-50 dark:hover:bg-white/[0.05]"
                   >
                     <span
-                      className={`absolute inset-y-1 left-0 w-[2px] rounded-full bg-cliq transition-transform duration-200 ${on ? 'scale-y-100' : 'scale-y-0'}`}
+                      className={`absolute inset-y-1 left-0 w-[2px] rounded-full transition-transform duration-200 ${on ? 'scale-y-100' : 'scale-y-0'}`}
+                      style={{ background: accent }}
                     />
                     <span className="flex min-w-0 items-center gap-2 transition-transform duration-200 group-hover/i:translate-x-0.5">
                       {multi ? (
                         <span
                           className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded-[4px] border transition-all duration-150 ${
-                            on ? 'scale-100 border-cliq bg-cliq text-white' : 'border-slate-300 dark:border-white/20'
+                            on ? 'border-transparent text-white' : 'border-slate-300 dark:border-white/20'
                           }`}
+                          style={on ? { background: accent } : undefined}
                         >
-                          <AnimatePresence>
-                            {on ? (
-                              <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}>
-                                <Check size={9} strokeWidth={3.5} />
-                              </motion.span>
-                            ) : null}
-                          </AnimatePresence>
+                          {on ? <Check size={9} strokeWidth={3.5} /> : null}
                         </span>
                       ) : null}
                       <span className="truncate text-slate-700 dark:text-white/80">{o.label}</span>
@@ -341,39 +361,7 @@ export function ExportModal({ onClose }: { onClose: () => void }) {
   const dirty = JSON.stringify(filters) !== JSON.stringify(EMPTY);
   const filename = format === 'pdf' ? preview?.pdfFilename : preview?.filename;
 
-  /** Every active filter as a removable pill, so nothing is applied invisibly. */
-  const applied = useMemo(() => {
-    const out: { key: string; text: string; clear: () => void }[] = [];
-    const lbl = (list: Facet[], v: string) => list.find((f) => f.value === v)?.label ?? v;
-    for (const v of filters.categories) {
-      out.push({ key: `c-${v}`, text: lbl(facets?.categories ?? [], v), clear: () => set('categories', filters.categories.filter((x) => x !== v)) });
-    }
-    for (const v of filters.genders) {
-      out.push({ key: `g-${v}`, text: lbl(facets?.genders ?? [], v), clear: () => set('genders', filters.genders.filter((x) => x !== v)) });
-    }
-    for (const v of filters.brands) {
-      out.push({ key: `b-${v}`, text: v, clear: () => set('brands', filters.brands.filter((x) => x !== v)) });
-    }
-    if (filters.position !== 'all') {
-      out.push({ key: 'pos', text: lbl(facets?.positions ?? [], filters.position), clear: () => set('position', 'all') });
-    }
-    if (filters.matched !== 'all') {
-      out.push({ key: 'm', text: filters.matched === 'matched' ? 'Matched only' : 'Unmatched only', clear: () => set('matched', 'all') });
-    }
-    if (filters.freshOnly) out.push({ key: 'f', text: 'Fresh only', clear: () => set('freshOnly', false) });
-    if (filters.q) out.push({ key: 'q', text: `“${filters.q}”`, clear: () => set('q', '') });
-    if (filters.minPrice != null || filters.maxPrice != null) {
-      out.push({
-        key: 'p',
-        text: `${filters.minPrice != null ? inr(filters.minPrice) : 'any'} – ${filters.maxPrice != null ? inr(filters.maxPrice) : 'any'}`,
-        clear: () => setFilters((f) => ({ ...f, minPrice: null, maxPrice: null })),
-      });
-    }
-    return out;
-  }, [filters, facets, set]);
 
-  const inputCls =
-    'w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 hover:border-slate-300 focus:border-cliq/50 focus:shadow-[0_0_0_3px_rgba(225,29,72,0.08)] dark:border-white/10 dark:bg-white/[0.03] dark:text-white dark:placeholder:text-white/25 dark:hover:border-white/20';
 
   return (
     <AnimatePresence>
@@ -462,128 +450,101 @@ export function ExportModal({ onClose }: { onClose: () => void }) {
                     </div>
                   </div>
 
-                  {/* Primary facets first and full width — the order a
-                      marketplace filter rail uses, because Category then Brand
-                      then Gender is how a merchandiser narrows a range. The
-                      analytical filters sit below in a quieter pair grid. */}
-                  <div className="grid gap-3">
-                    <Dropdown
-                      label="Category" options={facets.categories} selected={filters.categories}
-                      onChange={(v) => set('categories', v)} allLabel="All categories" multi searchable
-                    />
-                    <Dropdown
-                      label="Brand" options={facets.brands} selected={filters.brands}
-                      onChange={(v) => set('brands', v)} allLabel="All brands" multi searchable
-                    />
-                    <Dropdown
-                      label="Gender" options={facets.genders} selected={filters.genders}
-                      onChange={(v) => set('genders', v)} allLabel="All genders" multi
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 dark:border-white/[0.07] sm:grid-cols-3">
-                    <Dropdown
-                      label="Price position"
-                      options={facets.positions}
-                      selected={filters.position === 'all' ? [] : [filters.position]}
-                      onChange={(v) => set('position', (v[0] as Posture) ?? 'all')}
-                      allLabel="Any position"
-                      accent="#b3261e"
-                    />
-                    <Dropdown
-                      label="Match status"
-                      options={[
-                        { value: 'matched', label: 'With a competitor match', count: facets.matchedCount },
-                        { value: 'unmatched', label: 'No match found', count: facets.total - facets.matchedCount },
-                      ]}
-                      selected={filters.matched === 'all' ? [] : [filters.matched]}
-                      onChange={(v) => set('matched', (v[0] as ExportFilters['matched']) ?? 'all')}
-                      allLabel="All products"
-                    />
-                    <Dropdown
-                      label="Freshness"
-                      options={[{ value: 'fresh', label: 'Still fresh only', count: facets.freshCount }]}
-                      selected={filters.freshOnly ? ['fresh'] : []}
-                      onChange={(v) => set('freshOnly', v.length > 0)}
-                      allLabel="Any age"
-                      accent="#0f766e"
-                    />
-                  </div>
-
+                  {/* One inline bar, in the order a merchandiser narrows a
+                      range — Category, then Brand, then Gender — with the
+                      competitive cut last. Each trigger states its own value, so
+                      the bar reads as the complete filter. */}
                   <div>
-                    <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-white/35">
-                      Search
+                    <span className="mb-2 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-white/35">
+                      Filter
                     </span>
-                    <div className="relative">
-                      <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={filters.q}
-                        onChange={(e) => set('q', e.target.value)}
-                        placeholder="Brand or product name…"
-                        className={`${inputCls} pl-8`}
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+                      <FilterMenu
+                        label="Category" options={facets.categories} selected={filters.categories}
+                        onChange={(v) => set('categories', v)} multi searchable
+                      />
+                      <FilterMenu
+                        label="Brand" options={facets.brands} selected={filters.brands}
+                        onChange={(v) => set('brands', v)} multi searchable
+                      />
+                      <FilterMenu
+                        label="Gender" options={facets.genders} selected={filters.genders}
+                        onChange={(v) => set('genders', v)} multi
+                      />
+                      <FilterMenu
+                        label="Position"
+                        options={facets.positions}
+                        selected={filters.position === 'all' ? [] : [filters.position]}
+                        onChange={(v) => set('position', (v[0] as Posture) ?? 'all')}
+                        accent="#b3261e"
                       />
                     </div>
                   </div>
 
-                  <div>
-                    <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-white/35">
-                      Tata CLIQ price
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number" inputMode="numeric"
-                        placeholder={facets.priceRange ? String(facets.priceRange.min) : 'min'}
-                        value={filters.minPrice ?? ''}
-                        onChange={(e) => set('minPrice', e.target.value === '' ? null : Number(e.target.value))}
-                        className={inputCls}
-                      />
-                      <Minus size={12} className="shrink-0 text-slate-300 dark:text-white/20" />
-                      <input
-                        type="number" inputMode="numeric"
-                        placeholder={facets.priceRange ? String(facets.priceRange.max) : 'max'}
-                        value={filters.maxPrice ?? ''}
-                        onChange={(e) => set('maxPrice', e.target.value === '' ? null : Number(e.target.value))}
-                        className={inputCls}
-                      />
-                    </div>
+
+                  {/* Search and price band get the same treatment as the filter
+                      triggers — a hairline that lights up, not a box. */}
+                  <div className="grid gap-4 sm:grid-cols-[1.3fr_1fr]">
+                    <label className="group block">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-white/35">
+                        Search
+                      </span>
+                      <span className="relative flex items-center gap-2 pb-1.5">
+                        <Search size={13} className="shrink-0 text-slate-400 transition group-focus-within:text-cliq" />
+                        <input
+                          value={filters.q}
+                          onChange={(e) => set('q', e.target.value)}
+                          placeholder="Brand or product name…"
+                          className="w-full bg-transparent text-xs text-slate-900 outline-none placeholder:text-slate-400 dark:text-white dark:placeholder:text-white/25"
+                        />
+                        <span className="absolute inset-x-0 bottom-0 h-px bg-slate-200 dark:bg-white/10" />
+                        <span className="absolute inset-x-0 bottom-0 h-px origin-left scale-x-0 bg-cliq transition-transform duration-300 group-focus-within:scale-x-100" />
+                      </span>
+                    </label>
+
+                    <label className="group block">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-white/35">
+                        Tata CLIQ price
+                      </span>
+                      <span className="relative flex items-center gap-2 pb-1.5">
+                        <input
+                          type="number" inputMode="numeric"
+                          placeholder={facets.priceRange ? String(facets.priceRange.min) : 'min'}
+                          value={filters.minPrice ?? ''}
+                          onChange={(e) => set('minPrice', e.target.value === '' ? null : Number(e.target.value))}
+                          className="w-full bg-transparent text-xs tabular-nums text-slate-900 outline-none placeholder:text-slate-400 dark:text-white dark:placeholder:text-white/25"
+                        />
+                        <span className="shrink-0 text-slate-300 dark:text-white/20">&ndash;</span>
+                        <input
+                          type="number" inputMode="numeric"
+                          placeholder={facets.priceRange ? String(facets.priceRange.max) : 'max'}
+                          value={filters.maxPrice ?? ''}
+                          onChange={(e) => set('maxPrice', e.target.value === '' ? null : Number(e.target.value))}
+                          className="w-full bg-transparent text-xs tabular-nums text-slate-900 outline-none placeholder:text-slate-400 dark:text-white dark:placeholder:text-white/25"
+                        />
+                        <span className="absolute inset-x-0 bottom-0 h-px bg-slate-200 dark:bg-white/10" />
+                        <span className="absolute inset-x-0 bottom-0 h-px origin-left scale-x-0 bg-cliq transition-transform duration-300 group-focus-within:scale-x-100" />
+                      </span>
+                    </label>
                   </div>
 
-                  {/* Applied filters */}
+                  {/* No pill strip: each trigger already states its own value,
+                      and repeating them below was the same information twice. */}
                   <AnimatePresence>
-                    {applied.length ? (
+                    {dirty ? (
                       <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
                         className="overflow-hidden"
                       >
-                        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-3 dark:border-white/[0.07]">
-                          <SlidersHorizontal size={11} className="text-slate-400" />
-                          <AnimatePresence mode="popLayout">
-                            {applied.map((a) => (
-                              <motion.button
-                                key={a.key}
-                                layout
-                                initial={{ opacity: 0, scale: 0.85 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.85 }}
-                                transition={SPRING}
-                                onClick={a.clear}
-                                className="group/p flex items-center gap-1 rounded-full border border-cliq/25 bg-cliq/[0.07] py-1 pl-2.5 pr-1.5 text-[10px] font-medium text-cliq transition hover:bg-cliq hover:text-white"
-                              >
-                                {a.text}
-                                <X size={9} className="opacity-50 transition group-hover/p:opacity-100" />
-                              </motion.button>
-                            ))}
-                          </AnimatePresence>
-                          <button
-                            onClick={() => setFilters(EMPTY)}
-                            className="group/r ml-auto flex items-center gap-1 text-[10px] font-medium text-slate-400 transition hover:text-slate-700 dark:hover:text-white"
-                          >
-                            <RotateCcw size={10} className="transition-transform duration-300 group-hover/r:-rotate-180" />
-                            Reset
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => setFilters(EMPTY)}
+                          className="group/r flex items-center gap-1.5 pt-1 text-[11px] font-medium text-slate-400 transition hover:text-slate-800 dark:text-white/35 dark:hover:text-white"
+                        >
+                          <RotateCcw size={11} className="transition-transform duration-500 group-hover/r:-rotate-[360deg]" />
+                          Clear all filters
+                        </button>
                       </motion.div>
                     ) : null}
                   </AnimatePresence>
