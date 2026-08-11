@@ -12,7 +12,7 @@ import { dirname, resolve } from 'node:path';
 import { normalizeText } from './lib/normalize.mjs';
 import { buildIdf } from './lib/semantic.mjs';
 import { persistence, isFresh, ageHours, fingerprint } from './cache/persistence.mjs';
-import { toExportRow } from './export/rows.mjs';
+import { toExportRow, compareSizes } from './export/rows.mjs';
 import { config } from './config.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -265,7 +265,7 @@ class Store {
    */
   exportRows(filters = {}) {
     const {
-      q = '', brands = [], categories = [], genders = [],
+      q = '', brands = [], categories = [], genders = [], sizes = [],
       position = 'all', matched = 'all', freshOnly = false,
       minPrice = null, maxPrice = null,
     } = filters;
@@ -285,6 +285,9 @@ class Store {
       if (!has(categories, row.category ?? 'unclassified')) continue;
       if (!has(genders, row.gender ?? 'unspecified')) continue;
       if (!has(brands, row.brand)) continue;
+      // A row answers a size filter if it is sold in ANY of the chosen sizes;
+      // picking S and M means "S or M", the way every storefront reads it.
+      if (sizes.length && !sizes.some((s) => row.sizes.includes(s))) continue;
       if (freshOnly && !row.fresh) continue;
       if (matched === 'matched' && row.matchedCount === 0) continue;
       if (matched === 'unmatched' && row.matchedCount > 0) continue;
@@ -308,36 +311,86 @@ class Store {
    * The filter vocabulary the export UI offers, with counts, derived from what
    * is actually saved. Offering a category with nothing behind it produces an
    * empty spreadsheet and a support ticket.
+   *
+   * Counts are relative to the filter set passed in, the way a storefront does
+   * it: with Polo selected, "The Souled Store 2" has to become 0, or the panel
+   * invites a combination that exports nothing. Each group is counted against
+   * every OTHER group but not itself — a brand list that narrowed to the brand
+   * you just ticked could never be widened to a second brand.
+   *
+   * The vocabulary and its order still come from the unfiltered set, so options
+   * keep their places instead of resequencing under the cursor, and a value
+   * that currently selects nothing is reported at 0 rather than vanishing —
+   * "this exists but not here" is information; a shrinking list is not.
    */
-  exportFacets() {
-    const rows = this.exportRows();
-    const tally = (key, labelKey) => {
+  exportFacets(filters = {}) {
+    const all = this.exportRows();
+    const view = (overrides) => this.exportRows({ ...filters, ...overrides });
+
+    const vocabulary = (key, labelKey) => {
       const m = new Map();
-      for (const r of rows) {
+      for (const r of all) {
         const value = r[key] ?? (key === 'category' ? 'unclassified' : 'unspecified');
-        const label = r[labelKey];
-        const hit = m.get(value) || { value, label, count: 0 };
+        const hit = m.get(value) || { value, label: r[labelKey], count: 0 };
         hit.count++;
         m.set(value, hit);
       }
       return [...m.values()].sort((a, b) => b.count - a.count);
     };
-    const prices = rows.map((r) => r.cliqPrice).filter((p) => typeof p === 'number');
+    const counted = (key, rows) => {
+      const m = new Map();
+      for (const r of rows) {
+        const value = r[key] ?? (key === 'category' ? 'unclassified' : 'unspecified');
+        m.set(value, (m.get(value) || 0) + 1);
+      }
+      return m;
+    };
+    const withCounts = (vocab, counts) =>
+      vocab.map((o) => ({ ...o, count: counts.get(o.value) ?? 0 }));
+
+    const rows = view({});
+    const priceRows = view({ minPrice: null, maxPrice: null });
+    const positionRows = view({ position: 'all' });
+    const prices = priceRows.map((r) => r.cliqPrice).filter((p) => typeof p === 'number');
+
+    const sizeCounts = (list) => {
+      const m = new Map();
+      for (const r of list) for (const s of r.sizes ?? []) m.set(s, (m.get(s) || 0) + 1);
+      return m;
+    };
+    const sizeVocab = [...sizeCounts(all).keys()].sort(compareSizes);
+    const sizesNow = sizeCounts(view({ sizes: [] }));
+
+    const brandVocab = [...all.reduce((m, r) => m.set(r.brand, (m.get(r.brand) || 0) + 1), new Map()).entries()]
+      .filter(([name]) => name)
+      .sort((a, b) => b[1] - a[1])
+      .map(([value]) => ({ value, label: value }));
+    const brandsNow = counted('brand', view({ brands: [] }));
+
+    const posture = (list, name) => list.filter((r) => r.posture === name).length;
+
     return {
       total: rows.length,
-      categories: tally('category', 'categoryLabel'),
-      genders: tally('gender', 'genderLabel'),
-      brands: [...rows.reduce((m, r) => m.set(r.brand, (m.get(r.brand) || 0) + 1), new Map()).entries()]
-        .filter(([name]) => name)
-        .sort((a, b) => b[1] - a[1])
-        .map(([value, count]) => ({ value, label: value, count })),
+      // Everything saved, ignoring the filter — the empty panel ("nothing saved
+      // yet") and the empty result ("nothing matches this filter") are
+      // different messages, and `total` can no longer tell them apart.
+      savedTotal: all.length,
+      categories: withCounts(vocabulary('category', 'categoryLabel'), counted('category', view({ categories: [] }))),
+      genders: withCounts(vocabulary('gender', 'genderLabel'), counted('gender', view({ genders: [] }))),
+      // Sizes are multi-valued per row, so they are tallied separately and
+      // ordered XS→XL (then numerically) rather than by popularity: a size list
+      // out of size order is unreadable however well it ranks.
+      sizes: sizeVocab.map((value) => ({ value, label: value, count: sizesNow.get(value) ?? 0 })),
+      brands: brandVocab.map((b) => ({ ...b, count: brandsNow.get(b.value) ?? 0 })),
       positions: [
-        { value: 'undercut', label: 'Competitor undercuts CLIQ', count: rows.filter((r) => r.posture === 'undercut').length },
-        { value: 'winning', label: 'CLIQ is cheapest', count: rows.filter((r) => r.posture === 'winning').length },
-        { value: 'parity', label: 'Price parity', count: rows.filter((r) => r.posture === 'parity').length },
+        { value: 'undercut', label: 'Competitor undercuts CLIQ', count: posture(positionRows, 'undercut') },
+        { value: 'winning', label: 'CLIQ is cheapest', count: posture(positionRows, 'winning') },
+        { value: 'parity', label: 'Price parity', count: posture(positionRows, 'parity') },
       ],
       matchedCount: rows.filter((r) => r.matchedCount > 0).length,
       freshCount: rows.filter((r) => r.fresh).length,
+      // The price band is the range still reachable under the other filters, so
+      // the min/max placeholders describe the data the user can actually select.
       priceRange: prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null,
     };
   }

@@ -243,9 +243,14 @@ export interface Facet {
 }
 
 export interface ExportFacets {
+  /** Rows the current filter selects. */
   total: number;
+  /** Rows saved in total, whatever the filter — drives the "nothing saved" state. */
+  savedTotal: number;
   categories: Facet[];
   genders: Facet[];
+  /** Sizes the matched Myntra/Ajio listings offer — CLIQ's PDP publishes none. */
+  sizes: Facet[];
   brands: Facet[];
   positions: Facet[];
   matchedCount: number;
@@ -263,6 +268,7 @@ export interface ExportFilters {
   q: string;
   categories: string[];
   genders: string[];
+  sizes: string[];
   brands: string[];
   position: Posture;
   matched: 'all' | 'matched' | 'unmatched';

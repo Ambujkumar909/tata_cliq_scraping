@@ -2,7 +2,7 @@
  * Excel export — the comparison store as a workbook a category manager can
  * open, sort and pivot without asking anyone for help.
  *
- * Three sheets, in the order the work actually happens:
+ * Two sheets, in the order the work actually happens:
  *
  *   1. Summary     — what was exported, under which filters, and the six
  *                    numbers that answer "how are we priced?". A spreadsheet
@@ -10,9 +10,7 @@
  *                    moment it is forwarded, so the filter block is part of
  *                    the deliverable, not decoration.
  *   2. Comparison  — one row per product: identity, the three platforms'
- *                    prices, the gap, and the recommendation.
- *   3. Action List — only the SKUs a competitor undercuts, worst first. The
- *                    same rows as sheet 2, minus everything already fine.
+ *                    prices and discounts, the gap, and the recommendation.
  *
  * Formatting choices are functional: freeze panes and an autofilter because
  * these files get sorted; real number formats (not pre-formatted strings)
@@ -38,6 +36,9 @@ const RED_BG = 'FEE2E2';
 
 const MONEY = '"₹"#,##0';
 const PCT = '0.0"%"';
+// Discounts arrive as whole percents (55, not 0.55), so the percent sign is
+// literal — Excel's own `0%` format would multiply them by a hundred.
+const DISCOUNT = '0"%"';
 
 /**
  * Column plan for the Comparison sheet, ordered as the question is asked:
@@ -46,7 +47,10 @@ const PCT = '0.0"%"';
  *
  * Columns that do not change a decision are gone. Per-competitor MRP was three
  * near-identical copies of the CLIQ list price; rating, availability and raw
- * timestamps belong to the product page, not to a pricing analysis.
+ * timestamps belong to the product page, not to a pricing analysis. Match
+ * confidence and the pricing date went the same way: both describe how the row
+ * was produced rather than what to do about it, and the engine already refuses
+ * to publish a match it does not trust.
  *
  * "Cheapest on", "Dearest on", the rupee gap, the gap percentage and the price
  * index all went the same way — not because they were wrong, but because the
@@ -81,10 +85,25 @@ function comparisonColumns() {
   cols.push(
     { header: 'Position', key: 'position', width: 15, get: (r) => r.position },
     { header: 'Recommendation', key: 'recommendation', width: 62, get: (r) => r.recommendation },
-    { header: 'Confidence', key: 'confidence', width: 11, get: (r) => r.confidence, fmt: '0%' },
-    { header: 'Priced On', key: 'matchedAt', width: 13, get: (r) => (r.matchedAt ? new Date(r.matchedAt) : null), fmt: 'dd-mmm-yyyy' },
-    { header: 'CLIQ Link', key: 'cliqUrl', width: 11, get: (r) => r.cliqUrl, link: true },
   );
+
+  // Discount on each platform, in the same platform order as the price block —
+  // the second half of a price story. Two listings at ₹1,299 are not the same
+  // offer when one is 20% off and the other 60%: the deep discounter has room
+  // to cut again, which is what a merchandiser reads a discount column for.
+  // They sit immediately before the links so the sheet ends on the two things
+  // you leave it for: the numbers, then the pages they came from.
+  cols.push(
+    { header: 'CLIQ Disc.', key: 'cliqDiscount', width: 11, get: (r) => r.cliqDiscount, fmt: DISCOUNT },
+  );
+  for (const { key, label } of PLATFORMS) {
+    cols.push({
+      header: `${label} Disc.`, key: `${key}Discount`, width: 11,
+      get: (r) => r.competitors[key].discountPercent, fmt: DISCOUNT,
+    });
+  }
+
+  cols.push({ header: 'CLIQ Link', key: 'cliqUrl', width: 11, get: (r) => r.cliqUrl, link: true });
   for (const { key, label } of PLATFORMS) {
     cols.push({ header: `${label} Link`, key: `${key}Url`, width: 11, get: (r) => r.competitors[key].url, link: true });
   }
@@ -186,6 +205,7 @@ export function describeFilters(filters = {}) {
   }
   if (filters.genders?.length) bits.push(`Gender: ${filters.genders.map((g) => GENDER_LABELS[g] || g).join(', ')}`);
   if (filters.brands?.length) bits.push(`Brand: ${filters.brands.join(', ')}`);
+  if (filters.sizes?.length) bits.push(`Size: ${filters.sizes.join(', ')}`);
   if (filters.position && filters.position !== 'all') {
     bits.push(`Position: ${{ undercut: 'Competitor undercuts CLIQ', winning: 'CLIQ is cheapest', parity: 'Price parity' }[filters.position] || filters.position}`);
   }
@@ -323,7 +343,7 @@ function writeSummarySheet(wb, rows, filters, meta) {
   sheet.addRow([]);
 
   const note = sheet.addRow([
-    `Prices are as at the "Priced On" date of each row, not live quotes. Saved comparisons are replayed for ${meta.ttlHours} hours before re-scraping.`,
+    `Prices are as at the time each comparison was run, not live quotes. Saved comparisons are replayed for ${meta.ttlHours} hours before re-scraping.`,
   ]);
   note.font = { size: 9, italic: true, color: { argb: `FF${MUTED}` } };
   return sheet;
@@ -343,16 +363,11 @@ export async function buildWorkbook(rows, { filters = {}, ttlHours = 168 } = {})
   const cols = comparisonColumns();
 
   writeSummarySheet(wb, rows, filters, meta);
+  // Two sheets only: the numbers, and the summary that frames them. An "Action
+  // List" sheet used to repeat the undercut rows; it is a filter, not a
+  // document — the Position column sorts to the same set in one click, and the
+  // export dialog can select it outright.
   writeComparisonSheet(wb, rows, 'Comparison', cols);
-
-  // The action sheet only earns its place when it is a genuine subset — when
-  // there is something to act on, and something else it was filtered out of.
-  // Exporting "undercut only" already IS the action list; a byte-identical
-  // second copy of it just makes the file look padded.
-  const undercut = rows.filter((r) => r.posture === 'undercut');
-  if (undercut.length && undercut.length < rows.length) {
-    writeComparisonSheet(wb, undercut, 'Action List', cols);
-  }
 
   return wb.xlsx.writeBuffer();
 }
@@ -363,6 +378,7 @@ export function exportFilename(filters = {}) {
   if (filters.genders?.length === 1) parts.push(filters.genders[0]);
   if (filters.categories?.length === 1) parts.push(filters.categories[0]);
   if (filters.brands?.length === 1) parts.push(filters.brands[0].toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  if (filters.sizes?.length === 1) parts.push(filters.sizes[0].toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if (filters.position && filters.position !== 'all') parts.push(filters.position);
   parts.push(new Date().toISOString().slice(0, 10));
   return `${parts.join('-')}.xlsx`;

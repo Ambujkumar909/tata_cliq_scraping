@@ -59,8 +59,13 @@ export const api = {
 
   insights: (limit = 12) => get<Insights>('/insights', { limit }),
 
-  /** Filter values that actually have saved comparisons behind them. */
-  exportFacets: () => get<ExportFacets>('/export/facets'),
+  /**
+   * Filter values with counts. Pass the current filter set and each count comes
+   * back as what that value would select alongside everything else already
+   * chosen — the counts move as the panel is narrowed.
+   */
+  exportFacets: (filters: Partial<ExportFilters> = {}) =>
+    get<ExportFacets>(`/export/facets?${exportQuery(filters)}`),
 
   /** How many rows a filter set selects — asked before building the file. */
   exportPreview: (filters: Partial<ExportFilters>) =>
@@ -83,6 +88,7 @@ export function exportQuery(f: Partial<ExportFilters>): string {
   for (const c of f.categories ?? []) p.append('category', c);
   for (const g of f.genders ?? []) p.append('gender', g);
   for (const b of f.brands ?? []) p.append('brand', b);
+  for (const s of f.sizes ?? []) p.append('size', s);
   if (f.position && f.position !== 'all') p.set('position', f.position);
   if (f.matched && f.matched !== 'all') p.set('matched', f.matched);
   if (f.freshOnly) p.set('freshOnly', 'true');

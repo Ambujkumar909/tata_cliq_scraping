@@ -11,6 +11,7 @@
 import { store } from '../store.mjs';
 import { buildWorkbook, exportFilename, describeFilters } from '../export/workbook.mjs';
 import { buildPdf, pdfFilename } from '../export/pdf.mjs';
+import { normalizeSize } from '../export/rows.mjs';
 import { config } from '../config.mjs';
 
 /** `?category=tshirt,jeans` and `?category=tshirt&category=jeans` both work. */
@@ -40,6 +41,7 @@ export function parseFilters(query = {}) {
     categories: list(query.category),
     genders: list(query.gender),
     brands: list(query.brand),
+    sizes: list(query.size).map((s) => normalizeSize(s)).filter(Boolean),
     position: POSITIONS.has(position) ? position : 'all',
     matched: MATCHED.has(matched) ? matched : 'all',
     freshOnly: query.freshOnly === 'true',
@@ -49,8 +51,12 @@ export function parseFilters(query = {}) {
 }
 
 export default async function exportRoutes(fastify) {
-  /** Filter vocabulary with counts — only values that have rows behind them. */
-  fastify.get('/export/facets', async () => store.exportFacets());
+  /**
+   * Filter vocabulary with counts. Takes the same query as /preview: the counts
+   * are what each value would select given everything else already chosen, so
+   * the panel can never offer a combination that exports nothing.
+   */
+  fastify.get('/export/facets', async (req) => store.exportFacets(parseFilters(req.query)));
 
   /**
    * Row count and headline numbers for a filter set, without building a file.

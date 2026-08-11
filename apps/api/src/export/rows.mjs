@@ -94,6 +94,61 @@ export function genderOf(anchor) {
   return null;
 }
 
+/**
+ * Sizes carried by a comparison.
+ *
+ * Tata CLIQ's PDP payload does not publish a size list, so the only honest
+ * source is the listings we matched it to on Myntra and Ajio — those do carry
+ * one. A size filter therefore means "this product is sold in that size on a
+ * platform we matched", which is exactly the question a merchandiser asks
+ * ("show me the L's a rival undercuts us on") and is never invented: a
+ * comparison with no match contributes no sizes at all.
+ */
+const SIZE_RANK = [
+  'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL', 'FREE SIZE', 'ONE SIZE',
+];
+
+/** Canonical form: uppercase, no padding, `2XL`-style aliases folded onto one key. */
+export function normalizeSize(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!s || s.length > 12) return null;
+  const alias = { '2XL': 'XXL', '2XS': 'XXS', 'XXXL': '3XL', 'FREE': 'FREE SIZE', 'OS': 'ONE SIZE' };
+  return alias[s] ?? s;
+}
+
+/** Apparel order first (XS → 5XL), then numbers ascending, then the rest A-Z. */
+export function compareSizes(a, b) {
+  const ra = SIZE_RANK.indexOf(a);
+  const rb = SIZE_RANK.indexOf(b);
+  if (ra !== -1 || rb !== -1) {
+    if (ra === -1) return 1;
+    if (rb === -1) return -1;
+    return ra - rb;
+  }
+  const na = Number(a);
+  const nb = Number(b);
+  const aNum = Number.isFinite(na);
+  const bNum = Number.isFinite(nb);
+  if (aNum && bNum) return na - nb;
+  if (aNum) return -1;
+  if (bNum) return 1;
+  return a.localeCompare(b);
+}
+
+/** Every size the matched competitor listings offer for this comparison. */
+export function sizesOf(cmp) {
+  const out = new Set();
+  for (const { key } of PLATFORMS) {
+    const m = cmp.competitors?.[key];
+    if (m?.status !== 'matched') continue;
+    for (const s of m.product?.sizes ?? []) {
+      const n = normalizeSize(s);
+      if (n) out.add(n);
+    }
+  }
+  return [...out].sort(compareSizes);
+}
+
 /** Flatten one saved comparison into its export row. */
 export function toExportRow(cmp) {
   const a = cmp.anchor || {};
@@ -164,6 +219,7 @@ export function toExportRow(cmp) {
     categoryLabel: category ? CATEGORY_LABELS[category] ?? category : UNCLASSIFIED,
     gender,
     genderLabel: gender ? GENDER_LABELS[gender] ?? gender : 'Unspecified',
+    sizes: sizesOf(cmp),
     color: a.color ?? null,
 
     cliqMrp: a.mrp ?? null,

@@ -43,18 +43,30 @@ const RUPEE = HAS_NOTO ? '₹' : 'Rs.';
 const money = (v) => (typeof v === 'number' ? `${RUPEE}${Math.round(v).toLocaleString('en-IN')}` : '—');
 const pct = (v) => (typeof v === 'number' ? `${Math.round(v)}%` : '—');
 
-/** Column plan — widths sum to the printable width of landscape A4. */
+/**
+ * Column plan — widths sum to the printable width of landscape A4.
+ *
+ * The three discount columns close the table, matching the workbook: a price
+ * without the discount behind it only tells half the story, since the platform
+ * already 60% off has far less room to cut again than the one at 10%. The width
+ * for them came out of Product, which was the one column whose content is
+ * clipped either way — a title reads fine at 30 characters when the Brand
+ * beside it is spelled out in full.
+ */
 const COLUMNS = [
-  { key: 'brand', head: 'Brand', w: 66, get: (r) => r.brand ?? '—' },
-  { key: 'title', head: 'Product', w: 196, get: (r) => r.title ?? '—' },
-  { key: 'category', head: 'Category', w: 56, get: (r) => r.categoryLabel },
-  { key: 'gender', head: 'Gender', w: 44, get: (r) => r.genderLabel },
-  { key: 'mrp', head: 'MRP', w: 48, align: 'right', get: (r) => money(r.cliqMrp) },
+  { key: 'brand', head: 'Brand', w: 60, get: (r) => r.brand ?? '—' },
+  { key: 'title', head: 'Product', w: 128, get: (r) => r.title ?? '—' },
+  { key: 'category', head: 'Category', w: 50, get: (r) => r.categoryLabel },
+  { key: 'gender', head: 'Gender', w: 40, get: (r) => r.genderLabel },
+  { key: 'mrp', head: 'MRP', w: 42, align: 'right', get: (r) => money(r.cliqMrp) },
   { key: 'cliq', head: 'Tata CLIQ', w: 52, align: 'right', price: true, get: (r) => money(r.cliqPrice), raw: (r) => r.cliqPrice },
   { key: 'myntra', head: 'Myntra', w: 52, align: 'right', price: true, get: (r) => money(r.competitors.myntra.price), raw: (r) => r.competitors.myntra.price },
   { key: 'ajio', head: 'Ajio', w: 52, align: 'right', price: true, get: (r) => money(r.competitors.ajio.price), raw: (r) => r.competitors.ajio.price },
-  { key: 'position', head: 'Position', w: 60, get: (r) => POSITION_SHORT[r.position] ?? r.position },
-  { key: 'action', head: 'Recommendation', w: 160, get: (r) => r.recommendation ?? '—' },
+  { key: 'position', head: 'Position', w: 58, get: (r) => POSITION_SHORT[r.position] ?? r.position },
+  { key: 'action', head: 'Recommendation', w: 150, get: (r) => r.recommendation ?? '—' },
+  { key: 'cliqDisc', head: 'CLIQ %', w: 32, align: 'right', get: (r) => pct(r.cliqDiscount) },
+  { key: 'myntraDisc', head: 'Myntra %', w: 40, align: 'right', get: (r) => pct(r.competitors.myntra.discountPercent) },
+  { key: 'ajioDisc', head: 'Ajio %', w: 30, align: 'right', get: (r) => pct(r.competitors.ajio.discountPercent) },
 ];
 
 /** One line per row means the long-form position label has to shorten. */
@@ -198,7 +210,11 @@ function tableHeader(doc, y) {
   useFont(doc, true);
   doc.fontSize(7).fillColor('#FFFFFF');
   for (const c of COLUMNS) {
-    doc.text(c.head, x + 3, y + 5, { width: c.w - 6, align: c.align === 'right' ? 'right' : 'left', lineBreak: false });
+    // Headers are clipped like the cells: a heading that overruns its column
+    // prints on top of its neighbour, which is worse than an ellipsis.
+    doc.text(clip(doc, c.head, c.w - 6), x + 3, y + 5, {
+      width: c.w - 6, align: c.align === 'right' ? 'right' : 'left', lineBreak: false,
+    });
     x += c.w;
   }
   return y + h;
@@ -317,9 +333,10 @@ export async function buildPdf(rows, { filters = {}, ttlHours = 168 } = {}) {
 
   useFont(doc);
   doc.fontSize(7).fillColor(GREY).text(
-    `Prices are as at each product's match date, not live quotes; saved comparisons are replayed for `
-    + `${ttlHours} hours before re-scraping. A blank price means no comparable listing was proven on that `
-    + `platform — never that the product is unavailable.`,
+    `The three % columns are each platform's discount off MRP. Prices are as at each product's match `
+    + `date, not live quotes; saved comparisons are replayed for ${ttlHours} hours before re-scraping. `
+    + `A blank price means no comparable listing was proven on that platform — never that the product `
+    + `is unavailable.`,
     left, y + 8, { width });
 
   doc.end();
@@ -332,6 +349,7 @@ export function pdfFilename(filters = {}) {
   if (filters.genders?.length === 1) parts.push(filters.genders[0]);
   if (filters.categories?.length === 1) parts.push(filters.categories[0]);
   if (filters.brands?.length === 1) parts.push(filters.brands[0].toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  if (filters.sizes?.length === 1) parts.push(filters.sizes[0].toLowerCase().replace(/[^a-z0-9]+/g, '-'));
   if (filters.position && filters.position !== 'all') parts.push(filters.position);
   parts.push(new Date().toISOString().slice(0, 10));
   return `${parts.join('-')}.pdf`;
