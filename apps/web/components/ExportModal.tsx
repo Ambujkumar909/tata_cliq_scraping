@@ -462,19 +462,26 @@ export function ExportModal({ onClose }: { onClose: () => void }) {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  {/* Primary facets first and full width — the order a
+                      marketplace filter rail uses, because Category then Brand
+                      then Gender is how a merchandiser narrows a range. The
+                      analytical filters sit below in a quieter pair grid. */}
+                  <div className="grid gap-3">
                     <Dropdown
                       label="Category" options={facets.categories} selected={filters.categories}
                       onChange={(v) => set('categories', v)} allLabel="All categories" multi searchable
                     />
                     <Dropdown
-                      label="Gender" options={facets.genders} selected={filters.genders}
-                      onChange={(v) => set('genders', v)} allLabel="All genders" multi
-                    />
-                    <Dropdown
                       label="Brand" options={facets.brands} selected={filters.brands}
                       onChange={(v) => set('brands', v)} allLabel="All brands" multi searchable
                     />
+                    <Dropdown
+                      label="Gender" options={facets.genders} selected={filters.genders}
+                      onChange={(v) => set('genders', v)} allLabel="All genders" multi
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 border-t border-slate-100 pt-4 dark:border-white/[0.07] sm:grid-cols-3">
                     <Dropdown
                       label="Price position"
                       options={facets.positions}

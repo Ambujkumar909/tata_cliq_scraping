@@ -23,6 +23,8 @@ const GREEN = '#0F766E';
 const GREEN_BG = '#E3F2EF';
 const RED = '#B3261E';
 const RED_BG = '#FBE9E7';
+const AMBER = '#B45309';
+const AMBER_BG = '#FDF3E3';
 const INK = '#111111';
 const GREY = '#5A5A5A';
 const RULE = '#C3CFDA';
@@ -43,18 +45,16 @@ const pct = (v) => (typeof v === 'number' ? `${Math.round(v)}%` : '—');
 
 /** Column plan — widths sum to the printable width of landscape A4. */
 const COLUMNS = [
-  { key: 'brand', head: 'Brand', w: 58, get: (r) => r.brand ?? '—' },
-  { key: 'title', head: 'Product', w: 150, get: (r) => r.title ?? '—' },
-  { key: 'category', head: 'Category', w: 50, get: (r) => r.categoryLabel },
-  { key: 'cliq', head: 'Tata CLIQ', w: 48, align: 'right', price: true, get: (r) => money(r.cliqPrice), raw: (r) => r.cliqPrice },
-  { key: 'myntra', head: 'Myntra', w: 48, align: 'right', price: true, get: (r) => money(r.competitors.myntra.price), raw: (r) => r.competitors.myntra.price },
-  { key: 'ajio', head: 'Ajio', w: 48, align: 'right', price: true, get: (r) => money(r.competitors.ajio.price), raw: (r) => r.competitors.ajio.price },
-  { key: 'cheapest', head: 'Cheapest', w: 48, get: (r) => r.cheapestPlatform ?? '—' },
-  { key: 'dearest', head: 'Dearest', w: 48, get: (r) => r.dearestPlatform ?? '—' },
-  { key: 'gap', head: 'Gap vs rival', w: 52, align: 'right', get: (r) => (r.priceGap == null ? '—' : money(r.priceGap)) },
-  { key: 'index', head: 'Index', w: 30, align: 'right', get: (r) => (r.priceIndex == null ? '—' : String(r.priceIndex)) },
-  { key: 'position', head: 'Position', w: 56, get: (r) => POSITION_SHORT[r.position] ?? r.position },
-  { key: 'action', head: 'Recommendation', w: 150, get: (r) => r.recommendation ?? '—' },
+  { key: 'brand', head: 'Brand', w: 66, get: (r) => r.brand ?? '—' },
+  { key: 'title', head: 'Product', w: 196, get: (r) => r.title ?? '—' },
+  { key: 'category', head: 'Category', w: 56, get: (r) => r.categoryLabel },
+  { key: 'gender', head: 'Gender', w: 44, get: (r) => r.genderLabel },
+  { key: 'mrp', head: 'MRP', w: 48, align: 'right', get: (r) => money(r.cliqMrp) },
+  { key: 'cliq', head: 'Tata CLIQ', w: 52, align: 'right', price: true, get: (r) => money(r.cliqPrice), raw: (r) => r.cliqPrice },
+  { key: 'myntra', head: 'Myntra', w: 52, align: 'right', price: true, get: (r) => money(r.competitors.myntra.price), raw: (r) => r.competitors.myntra.price },
+  { key: 'ajio', head: 'Ajio', w: 52, align: 'right', price: true, get: (r) => money(r.competitors.ajio.price), raw: (r) => r.competitors.ajio.price },
+  { key: 'position', head: 'Position', w: 60, get: (r) => POSITION_SHORT[r.position] ?? r.position },
+  { key: 'action', head: 'Recommendation', w: 160, get: (r) => r.recommendation ?? '—' },
 ];
 
 /** One line per row means the long-form position label has to shorten. */
@@ -221,18 +221,17 @@ function tableRow(doc, r, y, zebra) {
   for (const c of COLUMNS) {
     const v = c.get(r);
     let colour = INK;
-    if (c.price && lo !== hi) {
+    // Cheapest green, middle orange, dearest red — the same three tiers the
+    // workbook uses, so the two exports are read the same way.
+    if (c.price && lo !== hi && typeof c.raw(r) === 'number') {
       const raw = c.raw(r);
-      if (raw === lo) {
-        doc.rect(x + 1, y + 1, c.w - 2, h - 2).fill(GREEN_BG);
-        colour = GREEN;
-      } else if (raw === hi) {
-        doc.rect(x + 1, y + 1, c.w - 2, h - 2).fill(RED_BG);
-        colour = RED;
-      }
+      const [bg, fg] = raw === lo ? [GREEN_BG, GREEN] : raw === hi ? [RED_BG, RED] : [AMBER_BG, AMBER];
+      doc.rect(x + 1, y + 1, c.w - 2, h - 2).fill(bg);
+      colour = fg;
     }
-    if (c.key === 'position') colour = r.posture === 'undercut' ? RED : r.posture === 'winning' ? GREEN : GREY;
-    if (c.key === 'gap' && r.priceGap != null) colour = r.priceGap > 0 ? RED : r.priceGap < 0 ? GREEN : GREY;
+    if (c.key === 'position') {
+      colour = r.posture === 'undercut' ? RED : r.posture === 'winning' ? GREEN : r.posture === 'parity' ? AMBER : GREY;
+    }
 
     useFont(doc, c.price || c.key === 'position');
     doc.fontSize(7.2).fillColor(colour)

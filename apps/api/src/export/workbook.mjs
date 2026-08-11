@@ -26,14 +26,17 @@ const CLIQ = 'E11D48';
 const INK = '0F172A';
 const MUTED = '64748B';
 const BAND = 'F1F5F9';
+// Three tiers, because a three-platform comparison has three answers: the
+// cheapest, the dearest, and the one in between. Leaving the middle uncoloured
+// made it read as "no data" next to two tinted cells.
 const GREEN = '15803D';
 const GREEN_BG = 'DCFCE7';
+const AMBER = 'B45309';
+const AMBER_BG = 'FEF3C7';
 const RED = 'B91C1C';
 const RED_BG = 'FEE2E2';
-const AMBER_BG = 'FEF3C7';
 
 const MONEY = '"₹"#,##0';
-const MONEY_SIGNED = '"₹"#,##0;[Red]-"₹"#,##0';
 const PCT = '0.0"%"';
 
 /**
@@ -42,12 +45,15 @@ const PCT = '0.0"%"';
  * much, and what to do about it.
  *
  * Columns that do not change a decision are gone. Per-competitor MRP was three
- * near-identical copies of the CLIQ list price; status is folded into the price
- * cell (a blank price with a reason beneath it in the legend); rating,
- * availability and the raw timestamps belong to the product page, not to a
- * pricing analysis. What replaces them are the two columns a reader actually
- * scans for — who is CHEAPEST and who is DEAREST — plus the spread between
- * them and an index that makes products of different values comparable.
+ * near-identical copies of the CLIQ list price; rating, availability and raw
+ * timestamps belong to the product page, not to a pricing analysis.
+ *
+ * "Cheapest on", "Dearest on", the rupee gap, the gap percentage and the price
+ * index all went the same way — not because they were wrong, but because the
+ * three-tier colour on the price block already says which platform is cheapest
+ * and which is dearest, and the Recommendation states the gap in words. Six
+ * columns restating what the reader can already see is noise, and noise is what
+ * stops a sheet being scanned.
  */
 function comparisonColumns() {
   const cols = [
@@ -73,24 +79,9 @@ function comparisonColumns() {
   }
 
   cols.push(
-    { header: 'Cheapest On', key: 'cheapestPlatform', width: 14, get: (r) => r.cheapestPlatform },
-    { header: 'Dearest On', key: 'dearestPlatform', width: 14, get: (r) => r.dearestPlatform },
-    { header: 'Spread', key: 'priceSpread', width: 11, get: (r) => r.priceSpread, fmt: MONEY },
-    // Signed on purpose: positive means a rival is cheaper than us, which is
-    // the direction that costs money.
-    { header: 'CLIQ vs Cheapest Rival', key: 'priceGap', width: 20, get: (r) => r.priceGap, fmt: MONEY_SIGNED },
-    { header: 'Gap %', key: 'priceGapPercent', width: 9, get: (r) => r.priceGapPercent, fmt: PCT },
-    { header: 'Price Index', key: 'priceIndex', width: 11, get: (r) => r.priceIndex, fmt: '0' },
     { header: 'Position', key: 'position', width: 15, get: (r) => r.position },
-    { header: 'CLIQ Disc.', key: 'cliqDiscount', width: 11, get: (r) => r.cliqDiscount, fmt: PCT },
-    { header: 'Best Rival Disc.', key: 'rivalDiscount', width: 14, fmt: PCT,
-      get: (r) => {
-        const d = PLATFORMS.map(({ key }) => r.competitors[key].discountPercent)
-          .filter((v) => typeof v === 'number');
-        return d.length ? Math.max(...d) : null;
-      } },
+    { header: 'Recommendation', key: 'recommendation', width: 62, get: (r) => r.recommendation },
     { header: 'Confidence', key: 'confidence', width: 11, get: (r) => r.confidence, fmt: '0%' },
-    { header: 'Recommendation', key: 'recommendation', width: 58, get: (r) => r.recommendation },
     { header: 'Priced On', key: 'matchedAt', width: 13, get: (r) => (r.matchedAt ? new Date(r.matchedAt) : null), fmt: 'dd-mmm-yyyy' },
     { header: 'CLIQ Link', key: 'cliqUrl', width: 11, get: (r) => r.cliqUrl, link: true },
   );
@@ -141,63 +132,46 @@ function writeComparisonSheet(wb, rows, sheetName, cols) {
     });
 
     /**
-     * Mark the winner and the loser IN the price block itself.
+     * Rank the price block by colour: cheapest green, middle orange, dearest
+     * red. With the ranking columns removed this tinting IS the analysis — a
+     * reader scans the three price cells and knows the answer without reading
+     * a number, and the traffic-light order needs no legend to interpret.
      *
-     * This is the change that makes the sheet answer "who is cheapest and who
-     * is dearest" at a glance: green on the lowest of the three prices, red on
-     * the highest, so a reader scanning the block sees the answer in the cells
-     * being compared rather than having to cross-reference a column at the far
-     * right of the row.
+     * Equal prices are left untinted: at parity there is no winner to mark, and
+     * colouring one of two identical numbers green would invent a difference.
      */
-    const priceCols = cols.filter((c) => c.price);
-    const priced = priceCols
+    const priced = cols.filter((c) => c.price)
       .map((c) => ({ col: c, v: c.get(r) }))
       .filter((x) => typeof x.v === 'number');
     if (priced.length > 1) {
       const lo = Math.min(...priced.map((x) => x.v));
       const hi = Math.max(...priced.map((x) => x.v));
-      for (const { col, v } of priced) {
-        const cell = row.getCell(at(col.key));
-        if (v === lo && lo !== hi) {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${GREEN_BG}` } };
-          cell.font = { color: { argb: `FF${GREEN}` }, bold: true };
-        } else if (v === hi && lo !== hi) {
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${RED_BG}` } };
-          cell.font = { color: { argb: `FF${RED}` }, bold: true };
+      if (lo !== hi) {
+        for (const { col, v } of priced) {
+          const [bg, fg] = v === lo ? [GREEN_BG, GREEN] : v === hi ? [RED_BG, RED] : [AMBER_BG, AMBER];
+          const cell = row.getCell(at(col.key));
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${bg}` } };
+          cell.font = { color: { argb: `FF${fg}` }, bold: true };
         }
       }
     }
 
-    // Then the verdict columns, so the row reads the same way from either end.
+    // The verdict word carries the same three colours, so the row reads
+    // identically from either end.
     const posCell = row.getCell(at('position'));
-    const gapCell = row.getCell(at('priceGap'));
-    const idxCell = row.getCell(at('priceIndex'));
     if (r.posture === 'undercut') {
-      for (const cell of [posCell, gapCell, idxCell]) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${RED_BG}` } };
-        cell.font = { color: { argb: `FF${RED}` }, bold: true };
-      }
+      posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${RED_BG}` } };
+      posCell.font = { color: { argb: `FF${RED}` }, bold: true };
     } else if (r.posture === 'winning') {
-      for (const cell of [posCell, gapCell, idxCell]) {
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${GREEN_BG}` } };
-        cell.font = { color: { argb: `FF${GREEN}` }, bold: true };
-      }
+      posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${GREEN_BG}` } };
+      posCell.font = { color: { argb: `FF${GREEN}` }, bold: true };
     } else if (r.posture === 'parity') {
       posCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${AMBER_BG}` } };
+      posCell.font = { color: { argb: `FF${AMBER}` }, bold: true };
     }
 
     row.getCell(at('recommendation')).alignment = { wrapText: true, vertical: 'top' };
     row.getCell(at('title')).alignment = { wrapText: true, vertical: 'top' };
-  }
-
-  // A data bar on the spread turns "how volatile is this SKU's pricing?" into a
-  // shape, which is the one question the numbers alone answer slowly.
-  if (rows.length) {
-    const spreadCol = sheet.getColumn(at('priceSpread')).letter;
-    sheet.addConditionalFormatting({
-      ref: `${spreadCol}2:${spreadCol}${rows.length + 1}`,
-      rules: [{ type: 'dataBar', cfvo: [{ type: 'min' }, { type: 'max' }], color: { argb: `FF${CLIQ}` } }],
-    });
   }
 
   sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
@@ -335,18 +309,15 @@ function writeSummarySheet(wb, rows, filters, meta) {
   breakdown('By brand', (r) => r.brand || '—');
 
   section('How to read the Comparison sheet');
-  for (const [swatch, text] of [
-    ['GREEN', 'Lowest of the three prices for that product'],
-    ['RED', 'Highest of the three prices for that product'],
-    ['Price Index', 'Tata CLIQ price with the cheapest listing as 100 — above 100 means CLIQ is dearer'],
-    ['Spread', 'Highest price minus lowest, with a bar showing it against the rest of the range'],
-    ['Blank price', 'No comparable listing on that platform; the cell says why'],
+  for (const [swatch, text, bg, fg] of [
+    ['CHEAPEST', 'Lowest of the three prices for that product', GREEN_BG, GREEN],
+    ['MIDDLE', 'Neither cheapest nor dearest', AMBER_BG, AMBER],
+    ['DEAREST', 'Highest of the three prices for that product', RED_BG, RED],
+    ['No match', 'No comparable listing was proven on that platform — not that the product is unavailable', null, null],
   ]) {
     const r = sheet.addRow([swatch, text]);
-    r.getCell(1).font = { bold: true, size: 10,
-      color: { argb: swatch === 'GREEN' ? `FF${GREEN}` : swatch === 'RED' ? `FF${RED}` : `FF${INK}` } };
-    if (swatch === 'GREEN') r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${GREEN_BG}` } };
-    if (swatch === 'RED') r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${RED_BG}` } };
+    r.getCell(1).font = { bold: true, size: 10, color: { argb: `FF${fg ?? MUTED}` } };
+    if (bg) r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${bg}` } };
     r.getCell(2).font = { size: 10, color: { argb: `FF${MUTED}` } };
   }
   sheet.addRow([]);

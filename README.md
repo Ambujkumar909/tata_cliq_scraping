@@ -185,10 +185,16 @@ in a sheet. What survives is what changes a decision:
 | Block | Columns |
 |---|---|
 | What it is | Brand, product, category, gender, MRP |
-| What the market charges | Tata CLIQ, Myntra, Ajio — side by side, **lowest tinted green and highest tinted red in the row itself** |
-| Who wins | Cheapest on, Dearest on, Spread (with a data bar), CLIQ vs cheapest rival in ₹ and %, **Price Index** (CLIQ against the cheapest listing as 100), Position |
-| Promotional stance | CLIQ discount vs the best rival discount |
+| What the market charges | Tata CLIQ, Myntra, Ajio — side by side, ranked in place by colour: **cheapest green, middle orange, dearest red** |
+| The verdict | Position (CLIQ cheapest / Undercut / Parity), carrying the same three colours |
 | What to do | Match confidence, and the **recommendation** — the same `recommendedAction` string the report UI shows, reused rather than re-derived |
+| Provenance | The date each row was priced, and a link to each live listing |
+
+"Cheapest on", "Dearest on", the rupee gap, the gap percentage and the price
+index were all removed. Not because they were wrong — because the three-tier
+colour already says which platform is cheapest and which is dearest, and the
+recommendation states the gap in words. Six columns restating what the reader
+can already see is what stops a sheet being scanned.
 
 A blank competitor price says *why* it is blank ("Not listed", "Blocked —
 retry") rather than reading as free. Cheapest and dearest are left empty when
