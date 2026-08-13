@@ -7,7 +7,7 @@
  * call the gateway with those cookies + the x-myntra-app header — giving full
  * catalog recall. Falls back to HTML parsing if the gateway is unavailable.
  */
-import { extractJsonAfter } from '../lib/http.mjs';
+import { extractJsonAfter, getProxyDispatcher } from '../lib/http.mjs';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -26,7 +26,10 @@ async function fetchWithTimeout(url, init = {}, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
+    // Respect PROXY_HOSTS scoping (datacenter deploys need myntra.com routed
+    // through the residential proxy — Akamai walls it just like Ajio).
+    const dispatcher = await getProxyDispatcher(url);
+    return await fetch(url, { ...init, signal: ctrl.signal, ...(dispatcher ? { dispatcher } : {}) });
   } finally {
     clearTimeout(timer);
   }

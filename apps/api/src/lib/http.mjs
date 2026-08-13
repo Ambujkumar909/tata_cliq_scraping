@@ -45,6 +45,16 @@ function needsProxy(url) {
   }
 }
 
+/**
+ * Proxy dispatcher for adapters that manage their own fetch calls (Myntra's
+ * cookie-warmed gateway). Returns undici's ProxyAgent when the URL's host is
+ * proxy-scoped, else null. Without this, PROXY_HOSTS=myntra.com would be
+ * silently ignored by the Myntra adapter.
+ */
+export async function getProxyDispatcher(url) {
+  return needsProxy(url) ? getDispatcher() : null;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function fetchText(url, { headers = {}, retries = 3, timeoutMs } = {}) {
