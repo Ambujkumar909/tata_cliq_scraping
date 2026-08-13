@@ -199,8 +199,52 @@ function productGroup(cols) {
       attrRow('Material', cols, 'material', (c) =>
         titleCase(c.attributes?.fabricComposition?.raw || c.attributes?.material)),
       attrRow('Pattern', cols, 'pattern', (c) => titleCase(c.attributes?.pattern)),
+      // The description TEXT, not just its word count (which the Content
+      // Quality band already scores). Truncated: the report is a comparison
+      // grid, and a 400-word paragraph in a table cell is unreadable.
+      row(
+        'Description',
+        cols,
+        (c) => truncate(c.product?.description, 260),
+        (v) => (v ? MODERATE : NA),
+      ),
     ].filter((r) => r.cells.some((x) => x.value != null)),
   };
+}
+
+/** Trim to a word boundary so a cut never lands mid-word. */
+function truncate(s, max) {
+  const t = String(s ?? '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  if (t.length <= max) return t;
+  return `${t.slice(0, t.lastIndexOf(' ', max) || max)}…`;
+}
+
+/**
+ * Sizes as a shopper sees them: the list, with anything out of stock called
+ * out. CLIQ publishes live per-size stock, so "available" here is a fact about
+ * right now, not a catalogue listing.
+ */
+function sizeText(product) {
+  const sizes = product?.sizes ?? [];
+  if (!sizes.length) return null;
+  const inv = product?.inventory ?? [];
+  if (!inv.length) return sizes.join(', ');
+  const live = inv.filter((i) => i.available).map((i) => i.size);
+  const out = inv.filter((i) => !i.available).map((i) => i.size);
+  if (!live.length) return `All ${sizes.length} sizes out of stock`;
+  return out.length ? `${live.join(', ')}  (${out.join(', ')} out of stock)` : live.join(', ');
+}
+
+/** "Chart + image · Chest, Length" — what the platform actually publishes. */
+function sizeGuideText(product) {
+  const g = product?.sizeGuide;
+  if (!g) return null;
+  const bits = [];
+  if (g.imageUrl) bits.push('Chart image');
+  if (g.dimensions?.length) bits.push(g.dimensions.slice(0, 4).join(', '));
+  else if (g.rows) bits.push(`${g.rows} size rows`);
+  return bits.join(' · ') || 'Available';
 }
 
 function pricingGroup(cols) {
@@ -266,6 +310,21 @@ function pricingGroup(cols) {
             : c.product.inStock === false ? 'Out of Stock' : c.product.inStock === true ? 'In Stock' : null,
         (v) => (v == null ? NA : v === 'In Stock' ? BEST : LOW),
       ),
+      // Who is actually selling it. Marketplace listings differ from
+      // brand-direct ones on price, returns and stock, so this is context for
+      // every row above it. Myntra does not publish a seller on its PDP, which
+      // renders as "not available" rather than as a difference.
+      row(
+        'Seller',
+        cols,
+        (c) => {
+          const s = c.product?.seller;
+          if (!s) return null;
+          const r = c.product?.sellerRating;
+          return typeof r === 'number' ? `${s} (${r.toFixed(1)}★)` : s;
+        },
+        (v) => (v ? MODERATE : NA),
+      ),
     ].filter((r) => r.cells.some((x) => x.value != null)),
   };
 }
@@ -286,6 +345,12 @@ function specsGroup(cols) {
       attrRow('Wash Care', cols, 'washCare', (c) => titleCase(c.attributes?.washCare)),
       attrRow('Country of Origin', cols, 'countryOfOrigin', (c) =>
         titleCase(c.attributes?.countryOfOrigin || c.product?.countryOfOrigin)),
+      // Sizes are not scored as a match signal — two listings of the same SKU
+      // legitimately stock different sizes — so this reports availability
+      // rather than agreement.
+      row('Sizes Available', cols, (c) => sizeText(c.product), (v) =>
+        v == null ? NA : /out of stock/i.test(v) ? MODERATE : BEST),
+      row('Size Chart', cols, (c) => sizeGuideText(c.product), (v) => (v ? BEST : NA)),
     ].filter((r) => r.cells.some((x) => x.value != null)),
   };
 }
@@ -307,6 +372,12 @@ function contentGroup(cols) {
     })),
   });
 
+  // Social proof. Counts are compared higher-is-better, but the star rating is
+  // NOT — a 4.9 from 3 buyers is not better than a 4.2 from 900, and colouring
+  // it as if it were would mislead. It renders alongside its own count instead.
+  const ratings = num((c) => c.product?.ratingCount ?? null);
+  const reviews = num((c) => c.product?.reviewCount ?? null);
+
   return {
     id: 'content',
     title: 'Content Quality',
@@ -315,6 +386,20 @@ function contentGroup(cols) {
       mk('Bullet Points / Highlights', bullets, String),
       mk('Specifications Listed', specs, String),
       mk('Image Count', images, String),
+      {
+        label: 'Rating',
+        cells: cols.map((c) => {
+          const r = c.product?.rating ?? null;
+          return {
+            column: c.key,
+            value: r == null ? null : `${Number(r).toFixed(1)} ★`,
+            raw: r,
+            verdict: r == null ? NA : MODERATE,
+          };
+        }),
+      },
+      mk('Ratings Count', ratings, (v) => Number(v).toLocaleString('en-IN')),
+      mk('Reviews Count', reviews, (v) => Number(v).toLocaleString('en-IN')),
       {
         label: 'Video Available',
         cells: cols.map((c) => {

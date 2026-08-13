@@ -136,6 +136,8 @@ Then paste any Tata CLIQ product link into the dashboard — products outside th
 | `PROXY_HOSTS` | `ajio.com` | Hosts routed through the proxy (suffix match) |
 | `HTTP_TIMEOUT_MS` | `20000` | Per-request deadline (every network call has one) |
 | `REPORT_TTL_HOURS` | `168` (7 days) | How long a saved comparison is replayed before re-scraping |
+| `RECENT_TTL_HOURS` | `48` (2 days) | How long a link-compared product stays pinned as a recent search (`0` disables the strip) |
+| `RECENT_LIMIT` | `12` | Cards the recent-searches strip shows |
 | `CACHE_DIR` | `apps/api/data` | Where the fallback comparison snapshot is written |
 
 Every one of these is read from `.env` by both `npm run dev` and `docker compose`
@@ -170,6 +172,137 @@ catalog grid, so this page is the only way back to those reports.
 
 Cache state is visible at `GET /api/cache`. Losing the cache costs time, never
 correctness.
+
+## What the report compares
+
+Every field the comparison can prove, banded into Product · Pricing & Offers ·
+Specifications · Content Quality · AI Comparison Scores.
+
+| Band | Rows |
+|---|---|
+| Product | Image · Name · Brand · Category · Fit · Rise · Colour · Material · Pattern · **Description** |
+| Pricing & Offers | MRP · Selling Price · Discount % · Offer/Coupon · Delivery · Return Policy · Availability · **Seller** |
+| Specifications | Fabric Composition · Closure · Pockets · Neck/Collar · Sleeve · Stretch · Wash Care · Country of Origin · **Sizes Available** · **Size Chart** |
+| Content Quality | Description Length · Bullet Points · Specifications Listed · Image Count · **Rating** · **Ratings Count** · **Reviews Count** · Video Available |
+
+**Sizes carry live per-size stock.** CLIQ publishes them on the PDP's
+`variantOptions` — one entry per seller-variant, so the same size can appear a
+dozen times; they are collapsed by size (available if *any* variant has it) and
+rendered as `S, M, L, XL, XXL (3XL out of stock)`.
+
+**The size chart is a second endpoint** (`/products/{id}/sizeGuide`), fetched in
+parallel with the PDP so it costs no extra latency. It returns a measurement
+image *and* a dimension table, reported as `Chart image · Chest, Across Shoulder`.
+
+Two rules still govern every cell:
+
+1. **MISSING ≠ DIFFERENT.** A value the competitor never published renders grey
+   ("not available"), never as a mismatch. Myntra publishes no seller, so that
+   cell is blank rather than a difference — inventing one would be worse than
+   showing nothing.
+2. **The star rating is not scored higher-is-better.** A 4.9 from 3 buyers is
+   not better than a 4.2 from 900, so Rating renders neutral beside its own
+   count; only the counts are compared.
+
+Sizes are likewise **not** a match signal — two genuine listings of the same SKU
+routinely stock different sizes.
+
+## Bulk import — a sheet of thousands of links
+
+**Import sheet** in the dashboard nav takes an `.xlsx`, `.xlsm` or `.csv` and
+compares every Tata CLIQ product in it.
+
+**Parsing is layout-agnostic.** Client sheets arrive with headers on row 2, a
+numbering column, blank spacer rows and links spread across differently-named
+columns, so rather than demanding a template the parser scans *every cell of
+every sheet* and keeps whatever resolves to a CLIQ product — full URLs, hyperlink
+targets, or bare listing ids. Getting a column name wrong should never mean
+importing nothing. Duplicates collapse to one comparison, with the original row
+numbers remembered.
+
+**A template is available** at `GET /api/import/template.xlsx` (and from the
+import dialog) — a `Products` sheet with worked examples of all three accepted
+forms, plus a `How this works` sheet. It is *generated on demand from the same
+config the importer enforces*, so it can never advertise a limit the API no
+longer honours. It is a convenience, not a requirement: your own sheet almost
+certainly works as-is.
+
+**Nothing is scraped until you confirm.** The upload first returns a dry-run
+preview — rows scanned, links found, duplicates merged, and a time estimate. A
+5,000-row sheet is hours of scraping; showing what was understood *before*
+starting is the difference between a mistake that costs a click and one that
+costs an afternoon.
+
+**Then it runs in the background.** Measured throughput is ~1.6s per uncached
+product at `IMPORT_CONCURRENCY=4` — roughly 27 min per 1,000 links.
+
+- **Progress is persisted**, so closing the browser (or redeploying) does not
+  lose the run. A job left `running` when the process died is **requeued on
+  boot** and continues from where it stopped, not from row one.
+- **Rows are isolated** — one dead product id cannot abort the other 4,999.
+- **Cache first.** Re-uploading last week's sheet mostly replays saved
+  comparisons instead of re-asking the storefronts.
+- **Stop and resume** at any point; the remaining rows stay queued.
+- **Download** the finished workbook — the same Excel export the rest of the app
+  produces, scoped to that job.
+
+**Free accuracy evidence.** Where a row also carries a Myntra or Ajio URL (as in
+the client's own sample sheet), it is recorded as a *hint*: matching still runs
+normally, and the result reports whether the engine independently landed on the
+product the sheet named. Agreements are proof the matcher works on their data;
+disagreements are a shortlist worth reading.
+
+Concurrency is bounded by Myntra's and Ajio's tolerance rather than by CPU — a
+burst is exactly what trips Akamai. Raise `IMPORT_CONCURRENCY` only behind a
+residential proxy.
+
+### Measured at 10,000 links
+
+`node scripts/stress-import.mjs 10000` builds a 10k-row workbook and exercises
+everything scale actually stresses. Against the Docker stack:
+
+| | |
+|---|---|
+| Parse a 10,000-row workbook | **0.5 s** (+35 MB heap) |
+| Dry-run round trip over HTTP | **0.79 s** |
+| Persisted job document | **1.65 MB** in Redis |
+| Checkpoint write | **1 ms** |
+| Progress poll on a 9,711-row job | **1 ms / 367 bytes** |
+| Peak heap for the whole run | **82 MB** |
+
+The poll payload is constant-size because job rows are stripped from it — the
+counters live on the job, so a progress bar never transfers 10k rows. Row detail
+is a separate paginated call (`?items=true`), ~9 KB per 50-row page.
+
+**Verified survival:** a live 10,000-row job was interrupted with
+`docker restart pricelens-api` at row 746 and resumed at 855 — continuing from
+where it stopped, not from row one. Checkpointing every 25 rows caps the worst
+case at ~25 repeated comparisons, and those are cache hits anyway.
+
+## Recent searches
+
+Paste a CLIQ link, and the product it resolves to is **pinned to the top of the
+catalog for two days** (`RECENT_TTL_HOURS`) under *Recent searches* — image,
+price, the competitor strip, and how long ago you looked at it.
+
+This exists because a link-sourced product is deliberately kept *out* of the
+catalog: letting ad-hoc lookups into `products` would inflate the KPIs, the
+brand facets and pagination with things nobody ingested. That leaves it with no
+route back once the report tab is closed, short of `/reports` or the original
+URL. The strip is that route — and for a product that *is* in the catalog it
+still saves hunting through a 10k grid for the thing you compared an hour ago.
+
+- **Re-searching moves a card to the front** rather than adding a second one, so
+  the strip is a list of distinct products in last-seen order.
+- **Survives restarts** (Redis key with its own TTL, or the same JSON snapshot
+  the comparisons use). It is stored *outside* the matcher fingerprint: "someone
+  looked this up" is a fact about the session, not a verdict, so changing the
+  matcher must not clear it.
+- **Ages out on read** — no sweeper to keep running for correctness.
+- **Dismissable** (× on the card). That unpins it only; the saved comparison
+  behind it is expensive and stays in `/reports`.
+
+Set `RECENT_TTL_HOURS=0` to turn the strip off entirely.
 
 ## Export — Excel and PDF
 
@@ -238,7 +371,15 @@ catalog (`MSH10` holds women's product), so a product that never says gets
 | `GET` | `/api/reports?q=&page=&freshOnly=` | Saved comparisons, newest first (backs `/reports`) |
 | `GET` | `/api/stats` | Dashboard KPIs |
 | `GET` | `/api/insights?limit=` | Biggest dealer undercuts / CLIQ wins |
-| `GET` | `/api/resolve?url=` | Resolve a pasted CLIQ product link (fetches live if uncatalogued) |
+| `GET` | `/api/resolve?url=` | Resolve a pasted CLIQ product link (fetches live if uncatalogued); pins it as a recent search |
+| `GET` | `/api/import/template.xlsx` | Blank import template with worked examples |
+| `POST` | `/api/import?filename=&dryRun=` | Upload a sheet (raw body). `dryRun=true` parses and reports without scraping; otherwise returns `202` + a job id |
+| `GET` | `/api/import` | Every import job, newest first |
+| `GET` | `/api/import/:id?items=&filter=&page=` | Job progress. `items=true` adds paginated rows; `filter` = `matched`/`unmatched`/`failed`/`disagreed` |
+| `POST` | `/api/import/:id/cancel` · `/resume` | Stop a run, or requeue whatever is still pending |
+| `GET` | `/api/import/:id/export.xlsx` | The finished workbook for that job |
+| `GET` | `/api/recent?limit=` | Products compared by link in the last `RECENT_TTL_HOURS`, newest first |
+| `DELETE` | `/api/recent/:id` | Unpin one recent search (the saved comparison survives) |
 | `GET` | `/api/products?q=&brand=&sort=&page=` | Paginated catalog + summaries |
 | `GET` | `/api/products/:id` | 3-way comparison (live on cache miss) |
 | `GET` | `/api/products/:id/report` | **Full comparison report** (`?refresh=true` re-matches) |
@@ -288,6 +429,9 @@ Unknown vocabulary degrades to the universal signals (brand, MRP, model codes, s
 node scripts/audit-accuracy.mjs 110   # full live accuracy audit with confusion matrix
 node scripts/verify-gender.mjs        # gender-compatibility matrix + leak audit
 node scripts/verify-lp.mjs            # the verified Louis Philippe cross-platform pair
+node scripts/verify-recent.mjs        # recent-searches: pinning, order, dedupe, expiry, dismissal
+node scripts/verify-import.mjs [xlsx] # bulk import: parse, dry run, job, resume-after-crash, export
+node scripts/stress-import.mjs 10000  # bulk import at 10k rows: parse time, job size, poll latency
 node scripts/test-proxy.mjs           # Ajio proxy self-test
 ```
 

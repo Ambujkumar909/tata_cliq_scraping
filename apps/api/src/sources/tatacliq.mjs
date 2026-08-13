@@ -16,7 +16,10 @@
 import { fetchJson } from '../lib/http.mjs';
 
 const SEARCH = 'https://searchbff.tatacliq.com/products/mpl/search';
-const DETAIL = 'https://www.tatacliq.com/marketplacewebservices/v2/mpl/products/productDetails';
+// Base for every per-product endpoint. DETAIL appends the productDetails
+// resource; siblings like sizeGuide hang off PRODUCTS directly, NOT off DETAIL.
+const PRODUCTS = 'https://www.tatacliq.com/marketplacewebservices/v2/mpl/products';
+const DETAIL = `${PRODUCTS}/productDetails`;
 
 const HEADERS = {
   Accept: 'application/json',
@@ -25,6 +28,17 @@ const HEADERS = {
 };
 
 const abs = (u) => (u ? (u.startsWith('//') ? `https:${u}` : u) : null);
+
+/**
+ * CLIQ ships size-chart axes in caps and often ordinal-prefixed
+ * ("1.ACROSS SHOULDER"). Strip the ordering prefix and soften the case.
+ */
+const titleCase = (s) =>
+  String(s || '')
+    .replace(/^\s*\d+\s*[.)]\s*/, '')
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (m) => m.toUpperCase())
+    .trim();
 
 // ── Listing tier ──────────────────────────────────────────────
 
@@ -169,21 +183,79 @@ function detailPairs(details) {
   return out;
 }
 
-/** Count every distinct product image across all gallery albums. */
-function countImages(galleryImagesList) {
+/** Every distinct product image across all gallery albums, largest-first. */
+function galleryImages(galleryImagesList) {
   const seen = new Set();
   for (const album of galleryImagesList || []) {
     for (const g of album.galleryImages || []) {
-      if (g?.value && g.key === 'product') seen.add(g.value);
+      if (g?.value && g.key === 'product') seen.add(abs(g.value));
     }
   }
-  // Fall back to counting all keys if no 'product'-keyed variants exist.
+  // Fall back to all keys if no 'product'-keyed variants exist.
   if (!seen.size) {
     for (const album of galleryImagesList || []) {
-      for (const g of album.galleryImages || []) if (g?.value) seen.add(g.value);
+      for (const g of album.galleryImages || []) if (g?.value) seen.add(abs(g.value));
     }
   }
-  return seen.size;
+  return [...seen];
+}
+
+/**
+ * Sizes, with live per-size stock, from the PDP's `variantOptions`.
+ *
+ * CLIQ lists one entry per seller-variant, so the same size appears many times
+ * (a jeans PDP returned "28" nine times). Collapse by size: available if ANY
+ * variant has it, stock summed across them — that is what a shopper actually
+ * faces. Ordering follows CLIQ's own, which is already size order.
+ */
+function extractSizes(variantOptions) {
+  const out = new Map();
+  for (const v of variantOptions || []) {
+    const s = v?.sizelink;
+    const label = (s?.size ?? s?.brandSize ?? '').toString().trim();
+    if (!label) continue;
+    const hit = out.get(label) || { size: label, available: false, stock: 0 };
+    if (s.isAvailable) hit.available = true;
+    const n = Number(s.stockCount);
+    if (Number.isFinite(n)) hit.stock += n;
+    out.set(label, hit);
+  }
+  return [...out.values()];
+}
+
+/**
+ * The size chart: a measurement image AND a structured dimension table.
+ *
+ * A separate endpoint from the PDP, but keyed on the same product id, so it can
+ * be fetched in parallel rather than after. Never throws — a product with no
+ * published chart is normal, not an error.
+ */
+export async function fetchCliqSizeGuide(productId) {
+  try {
+    const d = await fetchJson(
+      `${PRODUCTS}/${productId}/sizeGuide?isPwa=true`,
+      { headers: HEADERS, retries: 1 },
+    );
+    if (d?.status && String(d.status).toLowerCase() !== 'success') return null;
+    // Each measurement is repeated once per unit (CMS and INCH), so the Set
+    // below is doing real work, not defensive de-duplication.
+    const dimensions = [];
+    for (const g of d?.sizeGuideList || []) {
+      for (const dim of g?.dimensionList || []) {
+        if (dim?.dimension) dimensions.push(titleCase(dim.dimension));
+      }
+    }
+    const imageUrl = abs(d?.imageURL) || null;
+    if (!imageUrl && !dimensions.length) return null;
+    return {
+      imageUrl,
+      // De-duplicated measurement axes, e.g. "Chest", "Length", "Shoulder".
+      dimensions: [...new Set(dimensions)],
+      rows: (d?.sizeGuideList || []).length,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -194,11 +266,14 @@ function countImages(galleryImagesList) {
 export async function fetchCliqDetail(productId) {
   if (!productId) return { available: false, reason: 'no_product_id' };
   try {
-    const d = await fetchJson(`${DETAIL}/${productId}?isPwa=true&isMDE=true`, {
-      headers: HEADERS,
-      retries: 2,
-    });
+    // In parallel: the size guide is keyed on the same product id, so it costs
+    // latency only if awaited sequentially.
+    const [d, sizeGuide] = await Promise.all([
+      fetchJson(`${DETAIL}/${productId}?isPwa=true&isMDE=true`, { headers: HEADERS, retries: 2 }),
+      fetchCliqSizeGuide(productId),
+    ]);
     const pairs = detailPairs(d.details);
+    const images = galleryImages(d.galleryImagesList);
     const description = d.productDescription || d.styleNote || null;
 
     return {
@@ -219,7 +294,11 @@ export async function fetchCliqDetail(productId) {
         null,
       deliveryModes: (d.deliveryModesATP || []).map((m) => ({ mode: m.key, promise: m.value })),
       offers: (d.potentialPromotions || []).map((o) => o.description || o.title).filter(Boolean),
-      imageCount: countImages(d.galleryImagesList),
+      imageCount: images.length,
+      images,
+      // Live per-size stock, straight off the PDP's variant list.
+      sizes: extractSizes(d.variantOptions),
+      sizeGuide,
       videoAvailable: Boolean(
         (d.imageGalleryAttributes || []).some?.((a) => /video/i.test(a?.key || '')) || d.videoUrl,
       ),

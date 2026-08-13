@@ -177,7 +177,30 @@ export async function fetchMyntraDetail(product, { timeoutMs } = {}) {
       plain((d.productDetails || []).find((p) => /product details/i.test(p?.title || ''))?.description) ||
       null;
 
-    const images = (d.media?.albums || []).reduce((n, a) => n + (a.images?.length || 0), 0);
+    const imageUrls = [];
+    for (const album of d.media?.albums || []) {
+      for (const im of album.images || []) {
+        const u = im?.secureSrc || im?.src;
+        if (u && !imageUrls.includes(u)) imageUrls.push(u);
+      }
+    }
+
+    /**
+     * Myntra publishes its size chart as structured measurements rather than an
+     * image. Reported in the same shape as CLIQ's so the report can compare
+     * like with like — "has a chart, measured on these axes".
+     */
+    const sizeChart = d.sizeChart || d.sizeChartUrl || null;
+    const dimensions = Array.isArray(d.sizeChart?.sizeRepresentationUrl)
+      ? []
+      : (d.sizeChart?.dimensions || []).map((x) => x?.name).filter(Boolean);
+    const sizeGuide = sizeChart
+      ? {
+          imageUrl: typeof d.sizeChart?.sizeRepresentationUrl === 'string' ? d.sizeChart.sizeRepresentationUrl : null,
+          dimensions: [...new Set(dimensions)],
+          rows: (d.sizeChart?.sizeChartUnits || []).length || 0,
+        }
+      : null;
 
     return {
       available: true,
@@ -196,7 +219,9 @@ export async function fetchMyntraDetail(product, { timeoutMs } = {}) {
         : (d.serviceability?.descriptors || []).find((t) => /return/i.test(t)) || null,
       deliveryModes: (d.serviceability?.descriptors || []).map((t) => ({ mode: 'standard', promise: t })),
       offers: (d.offers || []).map((o) => o.title).filter(Boolean),
-      imageCount: images,
+      imageCount: imageUrls.length,
+      images: imageUrls,
+      sizeGuide,
       videoAvailable: (d.media?.videos || []).length > 0,
       inStock: d.flags?.outOfStock === false,
       isCOD: d.flags?.codEnabled ?? null,

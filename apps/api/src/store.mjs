@@ -23,6 +23,7 @@ class Store {
     this.products = [];
     this.byId = new Map();
     this.comparisons = new Map(); // id -> comparison result
+    this.recent = new Map(); // id -> searchedAt ISO (lookups + imports, TTL-bounded)
     this.brands = new Map(); // brand -> count
     this.loadedAt = null;
   }
@@ -81,10 +82,16 @@ class Store {
       replayed++;
     }
 
+    // Recent link lookups outlive a restart too: the strip is a way back to
+    // what you were just working on, and losing it on every redeploy would make
+    // it useless exactly when it matters.
+    for (const [id, searchedAt] of await persistence.recentIds()) this.recent.set(id, searchedAt);
+
     this.loadedAt = new Date().toISOString();
     console.log(
       `[store] loaded ${this.products.length} products, ${this.comparisons.size} comparisons ` +
-        `(${replayed} replayed from cache), ${this.brands.size} brands`,
+        `(${replayed} replayed from cache), ${this.brands.size} brands, ` +
+        `${this.recent.size} recent searches`,
     );
   }
 
@@ -185,6 +192,85 @@ class Store {
           }
         : null,
     };
+  }
+
+  // ── Recent searches ──────────────────────────────────────────────
+  /**
+   * Record that a product was looked up by link, pinning it to the top of the
+   * catalog for the next `recentTtlHours`.
+   *
+   * Re-searching an id refreshes its timestamp rather than adding a second
+   * entry, so the strip stays a list of distinct products in last-seen order.
+   * Persisted write-through and non-blocking: the paste must not wait on, or
+   * fail because of, the cache.
+   */
+  markRecent(id, searchedAt = new Date().toISOString()) {
+    // RECENT_TTL_HOURS=0 turns the feature off; recording anything would write
+    // a key Redis rejects (EX 0) for a strip that renders empty regardless.
+    if (!id || config.recentTtlHours <= 0) return null;
+    this.recent.delete(id); // re-insert so Map iteration order stays last-seen
+    this.recent.set(id, searchedAt);
+    persistence.saveRecent(id, searchedAt).catch(() => {});
+    return searchedAt;
+  }
+
+  /**
+   * Products looked up by link inside the TTL, most recent first.
+   *
+   * Expired entries are dropped on read rather than swept: the list is short,
+   * it is read on every dashboard load, and a timer that has to keep running
+   * for correctness is a worse guarantee than a comparison against the clock.
+   *
+   * An id that no longer resolves (its ad-hoc anchor expired out of the cache)
+   * is forgotten instead of rendered as a broken card.
+   */
+  async recentSearches({ limit = config.recentLimit } = {}) {
+    const cutoff = Date.now() - config.recentTtlHours * 3600_000;
+    const items = [];
+
+    // Sorted explicitly rather than trusting Map insertion order: entries
+    // rehydrated from Redis arrive in SCAN order, which is not chronological.
+    const entries = [...this.recent.entries()].sort(
+      (a, b) => new Date(b[1]).getTime() - new Date(a[1]).getTime(),
+    );
+
+    for (const [id, searchedAt] of entries) {
+      const t = new Date(searchedAt).getTime();
+      if (!Number.isFinite(t) || t < cutoff) {
+        this.recent.delete(id);
+        persistence.forgetRecent(id).catch(() => {});
+        continue;
+      }
+      if (items.length >= limit) continue; // keep sweeping, but stop collecting
+
+      const product = await this.resolve(id);
+      if (!product) {
+        this.recent.delete(id);
+        persistence.forgetRecent(id).catch(() => {});
+        continue;
+      }
+      const ageH = (Date.now() - t) / 3600_000;
+      items.push({
+        ...this.withSummary(product),
+        searchedAt,
+        ageHours: Math.round(ageH * 10) / 10,
+        // How much longer it stays pinned. Never negative: an expired entry has
+        // already been dropped above.
+        expiresInHours: Math.max(0, Math.round((config.recentTtlHours - ageH) * 10) / 10),
+        source: product._transient ? 'link' : 'catalog',
+      });
+    }
+
+    return { total: items.length, ttlHours: config.recentTtlHours, items };
+  }
+
+  /**
+   * Unpin a recent search. The saved comparison is untouched — dismissing a
+   * card off the dashboard should not throw away an expensive report.
+   */
+  async forgetRecent(id) {
+    this.recent.delete(id);
+    await persistence.forgetRecent(id).catch(() => {});
   }
 
   /**

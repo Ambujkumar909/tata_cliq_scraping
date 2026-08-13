@@ -385,6 +385,10 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
       offers: d?.offers ?? [],
       inStock: d?.inStock ?? null,
       seller: d?.seller ?? null,
+      sellerRating: d?.sellerRating ?? null,
+      reviewCount: d?.reviewCount ?? null,
+      sizeGuide: d?.sizeGuide ?? null,
+      images: d?.images ?? [],
       categoryPath: d?.categoryPath ?? [],
     },
   };
@@ -446,6 +450,15 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
       offers: detail?.offers ?? [],
       inStock: detail?.inStock ?? null,
       seller: detail?.seller ?? null,
+      sellerRating: detail?.sellerRating ?? null,
+      reviewCount: detail?.reviewCount ?? null,
+      // CLIQ publishes sizes with live per-size stock on the PDP's variant list.
+      sizes: (detail?.sizes ?? []).map((s) => s.size),
+      inventory: (detail?.sizes ?? []).map((s) => ({
+        size: s.size, available: s.available, count: s.stock || null,
+      })),
+      sizeGuide: detail?.sizeGuide ?? null,
+      images: detail?.images ?? [],
       categoryPath: detail?.categoryPath ?? [],
       attributes: canonicalAttributes(anchor, detail),
       content: contentQuality(anchor, detail),

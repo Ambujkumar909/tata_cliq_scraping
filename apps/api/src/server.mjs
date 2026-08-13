@@ -11,18 +11,44 @@ import { persistence } from './cache/persistence.mjs';
 import metaRoutes from './routes/meta.mjs';
 import productRoutes from './routes/products.mjs';
 import exportRoutes from './routes/export.mjs';
+import importRoutes from './routes/import.mjs';
+import { importJobs } from './import/jobs.mjs';
 
 async function build() {
   const app = Fastify({
     logger: { level: config.env === 'production' ? 'info' : 'debug' },
+    // A spreadsheet of thousands of links is megabytes; the 1MB default would
+    // reject it as a malformed request rather than a large one.
+    bodyLimit: config.importMaxUploadMb * 1024 * 1024,
   });
 
   await app.register(cors, { origin: config.corsOrigin.split(','), credentials: true });
-  await app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
+  await app.register(rateLimit, {
+    max: 300,
+    timeWindow: '1 minute',
+    // A progress bar polls once a second for hours; that is normal use of this
+    // API, not abuse, and must not exhaust the shared budget.
+    allowList: (req) => req.url.startsWith('/api/import/'),
+  });
+
+  /**
+   * Spreadsheet uploads arrive as a raw body. Fastify has no parser for these
+   * content types, and without one it rejects the upload as unsupported before
+   * any route sees it.
+   */
+  for (const type of [
+    'application/octet-stream',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+  ]) {
+    app.addContentTypeParser(type, { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
+  }
 
   app.register(metaRoutes, { prefix: '/api' });
   app.register(productRoutes, { prefix: '/api' });
   app.register(exportRoutes, { prefix: '/api' });
+  app.register(importRoutes, { prefix: '/api' });
 
   app.get('/', async () => ({ name: 'PriceLens API', docs: '/api/health' }));
 
@@ -31,6 +57,8 @@ async function build() {
 
 async function main() {
   await store.load();
+  // Restores saved jobs and restarts anything the last process died mid-run.
+  await importJobs.init();
   const app = await build();
 
   // Flush the pending comparison snapshot before the process goes away —

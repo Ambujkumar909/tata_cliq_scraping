@@ -110,7 +110,25 @@ export interface ResolveResult {
   id: string;
   /** false when the product was fetched on demand rather than ingested. */
   inCatalog: boolean;
+  /** When this lookup pinned the product to the recent-searches strip. */
+  searchedAt?: string;
   product: ProductListItem;
+}
+
+/** A product looked up by link, pinned above the catalog until it ages out. */
+export interface RecentSearch extends ProductListItem {
+  searchedAt: string;
+  ageHours: number;
+  /** How much longer it stays pinned. */
+  expiresInHours: number;
+  /** 'link' means it is not in the ingested catalog — the strip is its only route back. */
+  source: 'catalog' | 'link';
+}
+
+export interface RecentSearchPage {
+  total: number;
+  ttlHours: number;
+  items: RecentSearch[];
 }
 
 // ── Product Match Comparison Report ───────────────────────────
@@ -231,6 +249,73 @@ export interface SavedReportPage {
   ttlHours: number;
   freshCount: number;
   items: SavedReport[];
+}
+
+// ── Bulk import ───────────────────────────────────────────────
+
+export type ImportStatus = 'queued' | 'running' | 'done' | 'cancelled' | 'failed';
+
+/** What the parser found, before any scraping is committed to. */
+export interface ImportPreview {
+  dryRun: true;
+  filename: string;
+  rowsScanned: number;
+  linksFound: number;
+  duplicates: number;
+  total: number;
+  withHints: number;
+  sample: { id: string; sheet: string; row: number; hints: Record<string, string> }[];
+}
+
+export interface ImportRow {
+  id: string;
+  sheet: string;
+  row: number;
+  sourceRows: number[];
+  hints: Record<string, string>;
+  state: 'pending' | 'done' | 'error';
+  status: 'matched' | 'no_match' | 'error' | null;
+  error: string | null;
+  cached: boolean;
+  /** Whether our match agreed with a competitor URL the sheet supplied. */
+  agreement: 'agreed' | 'disagreed' | null;
+  brand?: string;
+  title?: string;
+  matchedCount?: number;
+  prices?: Partial<Record<Platform, number>>;
+}
+
+export interface ImportJob {
+  id: string;
+  filename: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  status: ImportStatus;
+  rowsScanned: number;
+  linksFound: number;
+  duplicates: number;
+  total: number;
+  done: number;
+  matched: number;
+  noMatch: number;
+  failed: number;
+  fromCache: number;
+  hintAgreed: number;
+  hintDisagreed: number;
+  concurrency: number;
+  percent: number;
+  remaining: number;
+  etaSeconds: number | null;
+  note?: string;
+  error?: string;
+  rows?: {
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+    items: ImportRow[];
+  };
 }
 
 // ── Excel export ──────────────────────────────────────────────

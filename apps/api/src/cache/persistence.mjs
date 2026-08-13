@@ -27,6 +27,13 @@ const SNAPSHOT = resolve(CACHE_DIR, 'comparison-cache.json');
 const PREFIX = 'pricelens';
 const CMP_KEY = (fp, id) => `${PREFIX}:cmp:${fp}:${id}`;
 const ANCHOR_KEY = (id) => `${PREFIX}:anchor:${id}`;
+// Not fingerprinted: "this was looked up recently" is a fact about the user's
+// session, not a verdict the matcher produced, so a matcher change must not
+// wipe the strip.
+const RECENT_KEY = (id) => `${PREFIX}:recent:${id}`;
+// Likewise for import jobs: a job records what the user uploaded and how far it
+// got, which stays true across a matcher change.
+const JOB_KEY = (id) => `${PREFIX}:job:${id}`;
 
 /**
  * Cached results are only reusable while the inputs that produced them hold.
@@ -39,7 +46,13 @@ const ANCHOR_KEY = (id) => `${PREFIX}:anchor:${id}`;
 // of the category code's first letter. That changes which candidates survive the
 // gender gate and what is sent to the competitor search, so every v4 comparison
 // is a verdict the current engine would not necessarily reach — orphan them.
-export const MATCHER_VERSION = 'v5';
+//
+// v6: the comparison now carries sizes (with live per-size stock), the size
+// guide, the full image gallery, seller rating and review count. Verdicts are
+// unchanged, but a v5 record simply has no such fields — replaying one would
+// render those report rows permanently blank and read as a broken feature
+// rather than as missing data. Orphaning them re-scrapes once and fills them in.
+export const MATCHER_VERSION = 'v6';
 export const fingerprint = () =>
   `${MATCHER_VERSION}-s${config.strictSku ? 1 : 0}-m${String(config.matchMinScore).replace('.', '')}`;
 
@@ -57,8 +70,10 @@ class Persistence {
   constructor() {
     this.redis = null;
     this.backend = 'none'; // 'redis' | 'file' | 'none'
-    this.snapshot = new Map(); // id -> cmp   (file backend only)
-    this.anchors = new Map(); // id -> anchor (file backend only)
+    this.snapshot = new Map(); // id -> cmp        (file backend only)
+    this.anchors = new Map(); // id -> anchor      (file backend only)
+    this.recents = new Map(); // id -> searchedAt  (file backend only)
+    this.jobs = new Map(); // id -> import job   (file backend only)
     this.flushTimer = null;
     this.writes = 0;
   }
@@ -100,6 +115,11 @@ class Persistence {
     if (!existsSync(SNAPSHOT)) return;
     try {
       const raw = JSON.parse(await readFile(SNAPSHOT, 'utf8'));
+      // Read before the fingerprint gate: recency survives a matcher change
+      // because it says nothing about how a product was matched, only that
+      // someone looked it up. Expiry is applied on read.
+      for (const [id, at] of Object.entries(raw.recents || {})) this.recents.set(id, at);
+      for (const [id, job] of Object.entries(raw.jobs || {})) this.jobs.set(id, job);
       if (raw.fingerprint !== fingerprint()) {
         console.log('[cache] snapshot fingerprint changed — discarding stale comparisons');
         return;
@@ -122,13 +142,16 @@ class Persistence {
   }
 
   async flush() {
-    if (this.backend !== 'file' || !this.snapshot.size) return;
+    if (this.backend !== 'file') return;
+    if (!this.snapshot.size && !this.anchors.size && !this.recents.size && !this.jobs.size) return;
     await mkdir(CACHE_DIR, { recursive: true });
     const body = JSON.stringify({
       fingerprint: fingerprint(),
       savedAt: new Date().toISOString(),
       comparisons: Object.fromEntries(this.snapshot),
       anchors: Object.fromEntries(this.anchors),
+      recents: Object.fromEntries(this.recents),
+      jobs: Object.fromEntries(this.jobs),
     });
     // tmp + rename: a crash mid-write must not truncate a good snapshot.
     const tmp = `${SNAPSHOT}.tmp`;
@@ -233,6 +256,142 @@ class Persistence {
       }
     }
     return this.anchors.get(id) || null;
+  }
+
+  // ── Recent searches ────────────────────────────────────────────
+  /**
+   * Remember that a product was looked up, so it can be pinned to the top of
+   * the catalog for the next two days.
+   *
+   * Only the timestamp is stored — the product itself is already durable, as a
+   * catalog entry or as a saved ad-hoc anchor. Re-recording the same id simply
+   * moves it back to the front, which is what "recent" has to mean.
+   */
+  async saveRecent(id, searchedAt = new Date().toISOString()) {
+    if (!id) return;
+    if (this.backend === 'redis') {
+      try {
+        await this.redis.set(RECENT_KEY(id), searchedAt, {
+          EX: Math.round(config.recentTtlHours * 3600),
+        });
+      } catch (err) {
+        console.warn('[cache] recent save failed:', err.message);
+      }
+      return;
+    }
+    this.recents.set(id, searchedAt);
+    this._scheduleFlush();
+  }
+
+  /**
+   * Every id looked up inside the TTL, as `[id, searchedAt]`.
+   *
+   * Redis expires its own keys; the file backend has no sweeper, so entries
+   * past the window are dropped here — and pruned from the map, or a laptop
+   * left running for a month accumulates a snapshot of things nobody would
+   * call recent.
+   */
+  async recentIds() {
+    const cutoff = Date.now() - config.recentTtlHours * 3600_000;
+    const live = ([, at]) => {
+      const t = new Date(at).getTime();
+      return Number.isFinite(t) && t >= cutoff;
+    };
+
+    if (this.backend === 'redis') {
+      try {
+        const keys = [];
+        for await (const key of this.redis.scanIterator({ MATCH: `${RECENT_KEY('')}*`, COUNT: 500 })) keys.push(key);
+        if (!keys.length) return [];
+        const vals = await this.redis.mGet(keys);
+        return keys
+          .map((key, i) => [key.slice(RECENT_KEY('').length), vals[i]])
+          .filter(([id, at]) => id && at)
+          .filter(live);
+      } catch (err) {
+        console.warn('[cache] recent load failed:', err.message);
+        return [];
+      }
+    }
+
+    const out = [];
+    for (const entry of [...this.recents.entries()]) {
+      if (live(entry)) out.push(entry);
+      else this.recents.delete(entry[0]);
+    }
+    return out;
+  }
+
+  async forgetRecent(id) {
+    if (this.backend === 'redis') {
+      try {
+        await this.redis.del(RECENT_KEY(id));
+      } catch { /* best effort */ }
+      return;
+    }
+    if (this.recents.delete(id)) this._scheduleFlush();
+  }
+
+  // ── Import jobs ────────────────────────────────────────────────
+  /**
+   * Save a bulk-import job.
+   *
+   * Debounced by default: a running job checkpoints every 25 rows, and a job
+   * document carrying 10k items is far too big to rewrite on each one. Passing
+   * `immediate` forces the write that matters — the one when the job ends.
+   */
+  async saveJob(job, immediate = false) {
+    if (!job?.id) return;
+    if (!immediate) {
+      this._pendingJobs = this._pendingJobs || new Map();
+      this._pendingJobs.set(job.id, job);
+      if (this._jobTimer) return;
+      this._jobTimer = setTimeout(() => {
+        this._jobTimer = null;
+        const pending = [...(this._pendingJobs?.values() || [])];
+        this._pendingJobs?.clear();
+        for (const j of pending) this.saveJob(j, true).catch(() => {});
+      }, 3000);
+      this._jobTimer.unref?.();
+      return;
+    }
+
+    if (this.backend === 'redis') {
+      try {
+        await this.redis.set(JOB_KEY(job.id), JSON.stringify(job), {
+          EX: Math.round(config.importJobTtlHours * 3600),
+        });
+      } catch (err) {
+        console.warn('[cache] job save failed:', err.message);
+      }
+      return;
+    }
+    this.jobs = this.jobs || new Map();
+    this.jobs.set(job.id, job);
+    this._scheduleFlush();
+  }
+
+  async loadJobs({ limit = 50 } = {}) {
+    const out = [];
+    if (this.backend === 'redis') {
+      try {
+        const keys = [];
+        for await (const key of this.redis.scanIterator({ MATCH: `${JOB_KEY('')}*`, COUNT: 200 })) {
+          keys.push(key);
+          if (keys.length >= limit) break;
+        }
+        if (!keys.length) return [];
+        for (const raw of await this.redis.mGet(keys)) {
+          if (!raw) continue;
+          try { out.push(JSON.parse(raw)); } catch { /* skip corrupt */ }
+        }
+      } catch (err) {
+        console.warn('[cache] job load failed:', err.message);
+      }
+      return out;
+    }
+    for (const job of (this.jobs || new Map()).values()) out.push(job);
+    return out.slice(0, limit);
   }
 
   async stats() {

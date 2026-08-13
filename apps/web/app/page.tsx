@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import { Archive, Zap, FileSpreadsheet } from 'lucide-react';
+import { Archive, Zap, FileSpreadsheet, Upload } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Comparison, ProductListItem, Stats } from '@/lib/types';
 import { Logo } from '@/components/ui';
@@ -12,8 +12,10 @@ import { Controls } from '@/components/Controls';
 import { UrlLookup } from '@/components/UrlLookup';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { ProductCard } from '@/components/ProductCard';
+import { RecentSearches } from '@/components/RecentSearches';
 import { CompareModal } from '@/components/CompareModal';
 import { ExportModal } from '@/components/ExportModal';
+import { ImportModal } from '@/components/ImportModal';
 
 const PAGE_SIZE = 24;
 
@@ -28,6 +30,7 @@ export default function Home() {
   const [comparedOnly, setComparedOnly] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   // Bumped whenever a comparison lands, so the derived panels refetch instead of
   // showing the figures they happened to load with.
   const [dataVersion, setDataVersion] = useState(0);
@@ -96,6 +99,12 @@ export default function Home() {
             <Zap size={12} className="text-amber-500 dark:text-gold" /> Live from CLIQ · Myntra · Ajio
           </span>
           <button
+            onClick={() => setImporting(true)}
+            className="flex items-center gap-1.5 rounded-full bg-cliq px-3.5 py-2 font-semibold text-white transition hover:brightness-110"
+          >
+            <Upload size={13} /> Import sheet
+          </button>
+          <button
             onClick={() => setExporting(true)}
             className="flex items-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-2 font-semibold text-white transition hover:bg-emerald-700"
           >
@@ -141,6 +150,10 @@ export default function Home() {
       </div>
 
       <Intelligence stats={stats} onOpen={setOpenId} version={dataVersion} />
+
+      {/* Pinned above the grid: link-sourced products never enter the catalog
+          itself, so this is the only way back to one you just compared. */}
+      <RecentSearches onOpen={setOpenId} version={dataVersion} />
 
       <div id="catalog" className="mt-12">
         <Controls
@@ -204,6 +217,15 @@ export default function Home() {
       ) : null}
 
       {exporting ? <ExportModal onClose={() => setExporting(false)} /> : null}
+
+      {/* A finished import can add thousands of comparisons, so the KPIs, the
+          insight lists and the catalog grid all need to be re-read. */}
+      {importing ? (
+        <ImportModal
+          onClose={() => setImporting(false)}
+          onFinished={() => { setDataVersion((v) => v + 1); fetchPage(1, true); }}
+        />
+      ) : null}
     </main>
   );
 }

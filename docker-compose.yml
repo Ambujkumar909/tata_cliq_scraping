@@ -41,6 +41,14 @@ services:
       INGEST_TARGET_COUNT: ${INGEST_TARGET_COUNT:-2000}
       # Saved comparisons are replayed for this long before re-scraping.
       REPORT_TTL_HOURS: ${REPORT_TTL_HOURS:-168}
+      # Link-sourced products stay pinned above the catalog for this long.
+      RECENT_TTL_HOURS: ${RECENT_TTL_HOURS:-48}
+      RECENT_LIMIT: ${RECENT_LIMIT:-12}
+      # Bulk import of a sheet of links.
+      IMPORT_CONCURRENCY: ${IMPORT_CONCURRENCY:-4}
+      IMPORT_MAX_ROWS: ${IMPORT_MAX_ROWS:-20000}
+      IMPORT_MAX_UPLOAD_MB: ${IMPORT_MAX_UPLOAD_MB:-25}
+      IMPORT_JOB_TTL_HOURS: ${IMPORT_JOB_TTL_HOURS:-720}
       CACHE_DIR: /app/cache
     ports:
       - "4010:4010"

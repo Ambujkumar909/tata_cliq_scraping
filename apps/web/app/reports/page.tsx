@@ -6,7 +6,7 @@ import { ArrowLeft, Archive, Link2, Search, RefreshCw, Clock, ExternalLink, File
 import { ExportModal } from '@/components/ExportModal';
 import { api, PLATFORM_META, DEFAULT_TTL_HOURS } from '@/lib/api';
 import type { SavedReport, SavedReportPage } from '@/lib/types';
-import { inr } from '@/lib/format';
+import { inr, since } from '@/lib/format';
 import { Logo } from '@/components/ui';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -17,14 +17,6 @@ const matchTone = (t: string) =>
   : t === 'CLOSE MATCH' ? 'bg-sky-500/15 text-sky-600 dark:text-sky-300'
   : t === 'PARTIAL MATCH' ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
   : 'bg-slate-100 dark:bg-white/[0.06] text-slate-500 dark:text-white/50';
-
-const since = (h: number | null) => {
-  if (h == null) return '—';
-  if (h < 1 / 60) return 'moments ago';
-  if (h < 1) return `${Math.round(h * 60)} min ago`;
-  if (h < 24) return `${Math.round(h)} h ago`;
-  return `${Math.round(h / 24)} d ago`;
-};
 
 // A week-long TTL makes "160 h left" unreadable; switch to days past two days.
 const remaining = (h: number | null) => {
@@ -98,7 +90,7 @@ function ReportRow({ r, ttlHours, index }: { r: SavedReport; ttlHours: number; i
               {r.confidence != null ? ` · ${Math.round(r.confidence * 100)}%` : ''}
             </span>
             <span className="text-[11px] text-slate-400 dark:text-white/40">
-              {r.matchedCount}/2 matched · {since(r.ageHours)}
+              {r.matchedCount}/2 matched · {since(r.matchedAt)}
             </span>
             <Freshness r={r} ttlHours={ttlHours} />
           </div>

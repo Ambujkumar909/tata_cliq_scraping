@@ -17,7 +17,18 @@ function CheapestPill({ platform }: { platform: Platform }) {
   );
 }
 
-export function ProductCard({ p, onOpen, index }: { p: ProductListItem; onOpen: () => void; index: number }) {
+export function ProductCard({
+  p,
+  onOpen,
+  index,
+  badge,
+}: {
+  p: ProductListItem;
+  onOpen: () => void;
+  index: number;
+  /** Optional caption laid over the foot of the image — used for "3h ago" on recent searches. */
+  badge?: React.ReactNode;
+}) {
   const cmp = p.comparison;
   const prices = cmp?.prices;
   const competitorMin = prices
@@ -60,6 +71,9 @@ export function ProductCard({ p, onOpen, index }: { p: ProductListItem; onOpen: 
             <CheapestPill platform={cmp.cheapest.platform} />
           </div>
         ) : null}
+        {/* Sits on the gradient the image already carries, so it stays readable
+            whatever the photo behind it. */}
+        {badge ? <div className="absolute bottom-2 left-3">{badge}</div> : null}
       </div>
 
       {/* Body */}

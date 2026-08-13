@@ -1,6 +1,7 @@
 import type {
   ProductPage, Comparison, Stats, Insights, MatchReport, ResolveResult, SavedReportPage,
-  ExportFacets, ExportFilters, ExportPreview, ExportFormat,
+  RecentSearchPage, ExportFacets, ExportFilters, ExportPreview, ExportFormat,
+  ImportJob, ImportPreview,
 } from './types';
 
 const BASE =
@@ -23,6 +24,43 @@ async function get<T>(path: string, params?: Record<string, string | number | bo
     }
     throw new Error(detail || `API ${res.status} on ${path}`);
   }
+  return res.json();
+}
+
+/** Shared error unwrapping for non-GET calls. */
+async function fail(res: Response, path: string): Promise<never> {
+  let detail = '';
+  try {
+    const body = await res.json();
+    detail = body?.message || body?.error || '';
+  } catch {
+    /* non-JSON error body */
+  }
+  throw new Error(detail || `API ${res.status} on ${path}`);
+}
+
+async function post<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: 'POST' });
+  if (!res.ok) await fail(res, path);
+  return res.json();
+}
+
+/**
+ * Send a spreadsheet as a raw body.
+ *
+ * Not multipart: the payload is exactly one file, so wrapping it in form
+ * boundaries only adds a parser on the far end. The filename rides in the
+ * query string because that is all the server needs from it.
+ */
+async function upload<T>(file: File, dryRun: boolean): Promise<T> {
+  const qs = new URLSearchParams({ filename: file.name });
+  if (dryRun) qs.set('dryRun', 'true');
+  const res = await fetch(`${BASE}/import?${qs}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  if (!res.ok) await fail(res, '/import');
   return res.json();
 }
 
@@ -54,6 +92,41 @@ export const api = {
   /** Every comparison already generated and saved, newest first. */
   savedReports: (params: { q?: string; page?: number; pageSize?: number; freshOnly?: boolean } = {}) =>
     get<SavedReportPage>('/reports', params as Record<string, string | number | boolean>),
+
+  /** Products looked up by link inside the recency window, newest first. */
+  recent: (limit?: number) =>
+    get<RecentSearchPage>('/recent', limit ? { limit } : undefined),
+
+  /** Unpin one recent search. The saved comparison survives. */
+  forgetRecent: async (id: string) => {
+    const res = await fetch(`${BASE}/recent/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`API ${res.status} on /recent/${id}`);
+  },
+
+  // ── Bulk import ────────────────────────────────────────────
+  /**
+   * Parse a sheet WITHOUT scraping, so the user can confirm we read it
+   * correctly before committing to a run that may take hours.
+   */
+  importPreview: (file: File) => upload<ImportPreview>(file, true),
+
+  /** Upload for real. Returns immediately with a job to poll. */
+  importStart: (file: File) => upload<ImportJob>(file, false),
+
+  importJobs: (limit = 20) => get<{ total: number; jobs: ImportJob[] }>('/import', { limit }),
+
+  importJob: (
+    id: string,
+    opts: { items?: boolean; page?: number; pageSize?: number; filter?: string } = {},
+  ) => get<ImportJob>(`/import/${id}`, opts as Record<string, string | number | boolean>),
+
+  importCancel: (id: string) => post<ImportJob>(`/import/${id}/cancel`),
+  importResume: (id: string) => post<ImportJob>(`/import/${id}/resume`),
+
+  importExportUrl: (id: string) => `${BASE}/import/${id}/export.xlsx`,
+
+  /** A blank sheet in the shape we accept, with worked examples. */
+  importTemplateUrl: () => `${BASE}/import/template.xlsx`,
 
   stats: () => get<Stats>('/stats'),
 

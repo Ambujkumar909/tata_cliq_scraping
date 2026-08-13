@@ -29,7 +29,12 @@ export default async function productRoutes(fastify) {
     }
 
     const existing = await store.resolve(id);
-    if (existing) return { id, inCatalog: !existing._transient, product: store.withSummary(existing) };
+    if (existing) {
+      // Arriving by link is what makes a product "recent" — including a catalog
+      // product, which is otherwise buried wherever the sort happens to put it.
+      const searchedAt = store.markRecent(id);
+      return { id, inCatalog: !existing._transient, searchedAt, product: store.withSummary(existing) };
+    }
 
     const res = await fetchCliqAnchor(id);
     if (!res.ok) {
@@ -40,7 +45,27 @@ export default async function productRoutes(fastify) {
       return reply.code(404).send({ error: 'product_not_found', id, reason: res.reason, message });
     }
     store.addTransient(res.anchor);
-    return { id, inCatalog: false, product: store.withSummary(res.anchor) };
+    const searchedAt = store.markRecent(id);
+    return { id, inCatalog: false, searchedAt, product: store.withSummary(res.anchor) };
+  });
+
+  /**
+   * Products looked up by link in the last couple of days, newest first.
+   *
+   * Backs the strip pinned above the catalog grid: a link-sourced product is
+   * deliberately absent from the catalog itself, so without this the only way
+   * back to one you just compared is the saved-reports page or the original
+   * URL.
+   */
+  fastify.get('/recent', async (req) => {
+    const limit = Math.min(48, Math.max(1, Number(req.query.limit) || config.recentLimit));
+    return store.recentSearches({ limit });
+  });
+
+  // Unpin a recent search without waiting for it to age out.
+  fastify.delete('/recent/:id', async (req) => {
+    await store.forgetRecent(req.params.id);
+    return { id: req.params.id, removed: true };
   });
 
   // Paginated catalog with comparison summaries.
