@@ -165,6 +165,14 @@ async function gatewayPage(query, offset, rows, attempt = 1) {
 }
 
 /** HTML fallback (top ~32) if the gateway is blocked. */
+/**
+ * Storefront HTML search — the path that keeps working when Akamai tarpits the
+ * gateway. The SSR payload embeds the top ~50 hits (verified live; `&p=2` is
+ * ignored server-side — page 2 hydrates client-side and returns the same 50),
+ * so the practical fallback pool is ~50/query × 4 unioned queries ≈ 100–150
+ * candidates. Smaller than the gateway's 200–400, but measured at 11/12
+ * matches on a live sample.
+ */
 async function htmlFallback(query, limit) {
   const slug = encodeURIComponent(query.trim()).replace(/%20/g, '-');
   const res = await fetchWithTimeout(`https://www.myntra.com/${slug}?rawQuery=${encodeURIComponent(query.trim())}`, {
