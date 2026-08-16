@@ -134,7 +134,7 @@ export const SYNONYMS = {
 // distress treatment. Most specific first; first match wins.
 export const FADE_RULES = [
   ['clean', /\bno[\s-]?fade\b|\bclean[\s-]?look\b|\brinse(d)?[\s-]?wash\b|\bunwashed\b/],
-  ['heavy', /\bheav(?:y|ily)[\s-]?(?:fade|faded|wash|washed)\b|\bacid[\s-]?wash\b|\bstone[\s-]?wash\b/],
+  ['heavy', /\bheav(?:y|ily)[\s-]?(?:fade|faded|wash|washed)\b|\bacid[\s-]?wash\b|\bstone[\s-]?wash(?:ed)?\b/],
   ['light', /\blight(?:ly)?[\s-]?(?:fade|faded|wash|washed)\b/],
   ['mid', /\bmid[\s-]?(?:fade|wash)\b|\bmedium[\s-]?wash(?:ed)?\b/],
   ['dark', /\bdark[\s-]?wash(?:ed)?\b/],
@@ -159,6 +159,9 @@ export const KEY_ALIASES = {
   weave: ['Weave Type', 'Weave'],
   length: ['Length'],
   rise: ['Rise', 'Waist Rise'],
+  // Ajio publishes the denim wash as its own field ("Stone Wash", "Light
+  // Wash") — the single most discriminating attribute between sibling jeans.
+  wash: ['Wash', 'Wash Type', 'Fade'],
   sustainable: ['Sustainable'],
 };
 

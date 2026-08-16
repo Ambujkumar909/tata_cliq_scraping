@@ -1,13 +1,23 @@
 /**
- * Ajio source adapter (pure HTTP, proxy-aware).
+ * Ajio source adapter (pure HTTP, proxy-aware, optional browser session).
  *
- * Ajio sits behind Akamai and blocks datacenter/unclean IPs at the edge (HTTP 403
- * on every endpoint — even a full browser is blocked, so a headless browser buys
- * nothing). The correct, fast solution is a clean residential/mobile proxy via the
- * SCRAPE_PROXY env var. With a working egress IP this hits Ajio's JSON search API
- * directly. Without one, it degrades gracefully: { blocked: true }.
+ * TWO DIFFERENT WALLS, two different fixes — established by measurement:
+ *
+ *   SEARCH  `/api/search` gates on IP REPUTATION. Datacenter IPs get 403;
+ *           residential/mobile IPs sail through. Fix: SCRAPE_PROXY.
+ *   PDP     `/api/p/{code}` gates on Akamai's JS-computed `_abck` token, NOT
+ *           the IP. Proven: one machine, one residential IP, one second —
+ *           Node's fetch 403 with every header permutation, the same URL 200
+ *           inside a Chrome tab. No proxy can mint that token.
+ *           Fix: AJIO_BROWSER_COOKIES=true (see ajio-session.mjs).
+ *
+ * Both degrade gracefully: search returns { blocked: true }, detail returns
+ * { available: false }, and the report renders "not available" rather than
+ * inventing a difference.
  */
 import { fetchJson } from '../lib/http.mjs';
+import { ajioPdpFetch, ajioBrowserEnabled } from './ajio-session.mjs';
+import { config } from '../config.mjs';
 
 const API = 'https://www.ajio.com/api/search';
 const HEADERS = {
@@ -102,22 +112,44 @@ export async function fetchAjioDetail(product) {
   const code = product?.id;
   if (!code) return { available: false, reason: 'no_product_code' };
   try {
-    const data = await fetchJson(`${API.replace('/search', '')}/p/${code}?fields=SITE`, {
-      headers: HEADERS,
-      retries: 1,
-    });
-    const feature = {};
-    for (const g of data.featureData || data.classifications || []) {
-      for (const f of g.features || g.featureValues || []) {
-        const k = f.name || f.code;
-        const v = Array.isArray(f.featureValues) ? f.featureValues.map((x) => x.value).join(', ') : f.value;
-        if (k && v) feature[k] = v;
-      }
+    let data;
+    if (ajioBrowserEnabled()) {
+      // The PDP API only answers requests originating INSIDE a real page — see
+      // ajio-session.mjs for the measurements. Seed the page on this product's
+      // own PDP so the first call warms and reads in one navigation.
+      data = await ajioPdpFetch(code, product.url);
+      if (!data) return { available: false, reason: 'browser_session_unavailable' };
+    } else {
+      data = await fetchJson(`${API.replace('/search', '')}/p/${code}?fields=SITE`, {
+        headers: HEADERS,
+        retries: 1,
+      });
     }
+    // Ajio ships a FLAT feature list — [{ name, featureValues: [{ value }] }] —
+    // while `classifications` (older shape) nests them under groups. Handle
+    // both: reading only the grouped shape silently produced empty specs.
+    const feature = {};
+    const addFeature = (f) => {
+      const k = f?.name || f?.code;
+      const v = Array.isArray(f?.featureValues)
+        ? f.featureValues.map((x) => x.value).filter(Boolean).join(', ')
+        : f?.value;
+      if (k && v) feature[k] = v;
+    };
+    for (const f of data.featureData || []) addFeature(f);
+    for (const g of data.classifications || []) for (const f of g.features || []) addFeature(f);
     const images = Array.isArray(data.images) ? data.images.filter((i) => i.format === 'product').length : 0;
     return {
       available: true,
-      description: data.description || null,
+      // Ajio usually leaves `description` empty and puts the marketing prose in
+      // an "Additional Information" feature instead — without this fallback the
+      // description signal and content-quality row read as zero for every Ajio
+      // product that in fact has copy.
+      description:
+        data.description ||
+        feature['Additional Information 1'] ||
+        feature['Additional Information'] ||
+        null,
       attributes: feature,
       countryOfOrigin: data.countryOfOrigin || feature['Country of Origin'] || null,
       imageCount: images || (Array.isArray(data.images) ? data.images.length : 0),

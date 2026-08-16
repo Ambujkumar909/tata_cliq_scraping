@@ -18,6 +18,9 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
+      args:
+        # true → bakes chromium + Xvfb in (~400MB) so AJIO_BROWSER_COOKIES works
+        WITH_BROWSER: ${WITH_BROWSER:-false}
     container_name: pricelens-api
     restart: unless-stopped
     depends_on:
@@ -38,6 +41,10 @@ services:
       # Matching
       MATCH_MIN_SCORE: ${MATCH_MIN_SCORE:-0.58}
       STRICT_SKU: ${STRICT_SKU:-true}
+      # Read Ajio's PDP tier through a headed browser on a virtual display.
+      # Requires the image to be built with --build-arg WITH_BROWSER=true.
+      AJIO_BROWSER_COOKIES: ${AJIO_BROWSER_COOKIES:-false}
+      CHROME_PATH: ${CHROME_PATH:-/usr/bin/chromium-browser}
       INGEST_TARGET_COUNT: ${INGEST_TARGET_COUNT:-2000}
       # Saved comparisons are replayed for this long before re-scraping.
       REPORT_TTL_HOURS: ${REPORT_TTL_HOURS:-168}

@@ -17,6 +17,16 @@ export const config = {
    * precision for coverage.
    */
   strictSku: process.env.STRICT_SKU !== 'false',
+
+  /**
+   * Harvest Ajio's Akamai cookies with a headless browser so its PDP (specs,
+   * fabric, description) becomes readable. OFF by default: it needs a Chrome
+   * binary on the host, which the pure-HTTP stack otherwise never requires.
+   * See sources/ajio-session.mjs for why no proxy can substitute for this.
+   */
+  ajioBrowserCookies: process.env.AJIO_BROWSER_COOKIES === 'true',
+  /** Explicit browser binary for the Ajio session (Linux: /usr/bin/chromium). */
+  chromePath: process.env.CHROME_PATH || '',
   httpTimeoutMs: Number(process.env.HTTP_TIMEOUT_MS || 20000),
 
   /**

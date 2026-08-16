@@ -199,7 +199,8 @@ export function canonicalAttributes(product = {}, detail = {}) {
   return {
     fit: canonFit(raw(attrs, 'fit'), title),
     rise: detectRise(raw(attrs, 'rise') || text),
-    fade: detectFade(text),
+    // Structured wash field first (Ajio publishes one), then free text.
+    fade: detectFade(raw(attrs, 'wash') || text),
     distress: detectDistress(text),
     pattern: patternRaw ? detectPattern(patternRaw) || normalizeText(patternRaw) : detectPattern(title),
     color: product.color ? normalizeText(product.color) : null,
