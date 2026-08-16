@@ -13,6 +13,7 @@ import productRoutes from './routes/products.mjs';
 import exportRoutes from './routes/export.mjs';
 import importRoutes from './routes/import.mjs';
 import { importJobs } from './import/jobs.mjs';
+import { prewarmMyntra } from './sources/myntra.mjs';
 
 async function build() {
   const app = Fastify({
@@ -57,6 +58,9 @@ async function build() {
 
 async function main() {
   await store.load();
+  // Warm Myntra's Akamai cookies now and keep them fresh, so the first click
+  // after boot (or after idle) never pays the storefront round-trip.
+  prewarmMyntra();
   // Restores saved jobs and restarts anything the last process died mid-run.
   await importJobs.init();
   const app = await build();

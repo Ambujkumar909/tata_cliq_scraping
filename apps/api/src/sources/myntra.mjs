@@ -51,6 +51,12 @@ function mergeSetCookie(prev, setCookies) {
 
 async function warmCookies(force = false) {
   if (!force && _cookie && Date.now() - _cookieAt < COOKIE_TTL) return _cookie;
+  // Forced warms START OVER with an empty jar. Akamai's _abck cookie carries a
+  // per-client bot score that only worsens for a jar that keeps hitting the
+  // gateway without ever executing JS — an aged jar gets TARPITTED (a fresh
+  // server answered in 3s while a 30-minute-old one took 22s for the same
+  // product). A fresh identity every warm keeps the score at newcomer level.
+  if (force) _cookie = null;
   const res = await fetchWithTimeout('https://www.myntra.com/tshirts', {
     headers: { 'User-Agent': UA, Accept: 'text/html', 'Accept-Language': 'en-IN,en;q=0.9' },
   });
@@ -59,6 +65,18 @@ async function warmCookies(force = false) {
   _cookie = mergeSetCookie(_cookie, setCookies);
   _cookieAt = Date.now();
   return _cookie;
+}
+
+/**
+ * Pre-warm the Akamai cookie jar so the FIRST interactive match never pays the
+ * storefront round-trip. Called at server boot and on an interval; failures are
+ * silent — the next real search warms lazily as before.
+ */
+export function prewarmMyntra(intervalMs = 8 * 60 * 1000) {
+  warmCookies(true).catch(() => {});
+  const timer = setInterval(() => warmCookies(true).catch(() => {}), intervalMs);
+  timer.unref?.(); // never keep the process alive for this
+  return timer;
 }
 
 function mapProduct(p) {
@@ -98,19 +116,47 @@ function mapProduct(p) {
   };
 }
 
+/**
+ * Gateway tarpit circuit-breaker.
+ *
+ * After a burst of gateway calls (~17 matches in a minute measured), Akamai
+ * flips this client into TARPIT mode: requests hang until our own timeout
+ * instead of answering. Meanwhile the HTML fallback keeps working — so waiting
+ * is pure loss. Detection: a gateway TIMEOUT (not an HTTP error). Response:
+ * skip the gateway entirely for a cooldown and serve searches from the HTML
+ * fallback (~1s), then probe again.
+ */
+let gatewayCoolUntil = 0;
+const GATEWAY_COOLDOWN_MS = 5 * 60 * 1000;
+// The gateway answers in <1.5s when healthy; 4s means a tarpitted call costs
+// one 4s hiccup (which also arms the breaker) instead of a 20s stall.
+const GATEWAY_TIMEOUT_MS = 4000;
+
+export const gatewayTarpitted = () => Date.now() < gatewayCoolUntil;
+
 async function gatewayPage(query, offset, rows, attempt = 1) {
   const cookie = await warmCookies(attempt > 1);
   const url = `https://www.myntra.com/gateway/v2/search/${encodeURIComponent(query)}?rows=${rows}&o=${offset}`;
-  const res = await fetchWithTimeout(url, {
-    headers: {
-      'User-Agent': UA,
-      Accept: 'application/json',
-      'Accept-Language': 'en-IN,en;q=0.9',
-      Referer: `https://www.myntra.com/${encodeURIComponent(query).replace(/%20/g, '-')}`,
-      'x-myntra-app': APP_HEADER,
-      Cookie: cookie,
-    },
-  });
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {
+      headers: {
+        'User-Agent': UA,
+        Accept: 'application/json',
+        'Accept-Language': 'en-IN,en;q=0.9',
+        Referer: `https://www.myntra.com/${encodeURIComponent(query).replace(/%20/g, '-')}`,
+        'x-myntra-app': APP_HEADER,
+        Cookie: cookie,
+      },
+    }, GATEWAY_TIMEOUT_MS);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      gatewayCoolUntil = Date.now() + GATEWAY_COOLDOWN_MS;
+      console.warn('[myntra] gateway tarpitted — falling back to HTML search for 5 min');
+      throw new Error('gateway tarpit');
+    }
+    throw err;
+  }
   if ((res.status === 401 || res.status === 403) && attempt < 2) {
     return gatewayPage(query, offset, rows, attempt + 1);
   }
@@ -245,7 +291,14 @@ export async function fetchMyntraDetail(product, { timeoutMs } = {}) {
  * Search Myntra with deep recall. `limit` caps candidates; `pages` caps API
  * pages (100 each). Returns { total, candidates }.
  */
-export async function searchMyntra(query, { limit = 100, pages = 2 } = {}) {
+// pages default 1: the gateway returns 100 hits per page and the matcher
+// unions FOUR queries, so a second page per query bought ~70 extra candidates
+// for double the sequential search latency. Depth belongs to callers that need
+// it (the audit passes pages explicitly).
+export async function searchMyntra(query, { limit = 100, pages = 1 } = {}) {
+  // Breaker armed → don't even try the gateway; the HTML fallback answers in
+  // ~1s while the gateway would hang to its timeout.
+  if (gatewayTarpitted()) return htmlFallback(query, limit).catch(() => ({ total: 0, candidates: [] }));
   try {
     const byId = new Map();
     let total = 0;

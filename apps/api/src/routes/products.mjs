@@ -86,16 +86,50 @@ export default async function productRoutes(fastify) {
    * Fetch the comparison for an anchor, reusing a saved one when it is still
    * within the TTL. A match costs three storefronts' worth of scraping, so the
    * same product is never compared twice in a day unless explicitly refreshed.
+   *
+   * In-flight dedupe: a hover-prefetch, a click, and a report open can all ask
+   * for the same uncached product within a second. One live match runs; every
+   * caller awaits the same promise. This is also what makes hover-prefetch
+   * effective — the click joins work that started when the cursor arrived.
    */
+  const inFlight = new Map(); // anchor.id -> Promise<comparison>
+
+  function startMatch(anchor) {
+    let p = inFlight.get(anchor.id);
+    if (p) return p;
+    p = matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku })
+      .then((cmp) => {
+        store.setComparison(anchor.id, cmp);
+        return cmp;
+      })
+      .finally(() => inFlight.delete(anchor.id));
+    inFlight.set(anchor.id, p);
+    return p;
+  }
+
   async function comparisonFor(anchor, refresh) {
     if (!refresh) {
       const saved = await store.getFreshComparison(anchor.id);
       if (saved) return { cmp: saved, cached: true };
     }
-    const cmp = await matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku });
-    store.setComparison(anchor.id, cmp);
+    const cmp = await startMatch(anchor);
     return { cmp, cached: false };
   }
+
+  /**
+   * Fire-and-forget warm-up, called on card hover. Starts the live match the
+   * moment purchase intent appears, so the click that follows lands on a warm
+   * or in-flight comparison instead of a 10-second cold one. Answers 202
+   * immediately; errors surface on the eventual GET, not here.
+   */
+  fastify.post('/products/:id/prefetch', async (req, reply) => {
+    const anchor = await store.resolve(req.params.id);
+    if (!anchor) return reply.code(404).send({ error: 'product_not_found' });
+    const saved = await store.getFreshComparison(anchor.id);
+    if (saved) return reply.code(200).send({ status: 'cached' });
+    startMatch(anchor).catch(() => {});
+    return reply.code(202).send({ status: inFlight.has(anchor.id) ? 'matching' : 'started' });
+  });
 
   // Cache provenance the UI can be honest with: a replayed report says so, and
   // says how old it is, instead of implying the prices were just fetched.
@@ -129,13 +163,12 @@ export default async function productRoutes(fastify) {
     return { ...buildReport(cmp), ...provenance(cmp, cached) };
   });
 
-  // Force a fresh live match (bypasses cache).
+  // Force a fresh live match (bypasses the saved-comparison cache, but still
+  // joins an already-running match — that one IS fresh by definition).
   fastify.post('/products/:id/match', async (req, reply) => {
     const anchor = await store.resolve(req.params.id);
     if (!anchor) return reply.code(404).send({ error: 'product_not_found' });
-    const cmp = await matchAnchor(anchor, { minScore: config.matchMinScore, strictSku: config.strictSku });
-    store.setComparison(anchor.id, cmp);
-    return cmp;
+    return startMatch(anchor);
   });
 
   /**
