@@ -89,6 +89,15 @@ export const api = {
   report: (id: string, refresh = false) =>
     get<MatchReport>(`/products/${id}/report`, refresh ? { refresh: true } : undefined),
 
+  /**
+   * Fire-and-forget match warm-up, sent on card hover. The server dedupes, so
+   * the click that follows joins the already-running match instead of starting
+   * a cold one. Never throws — a failed prefetch just means a normal load.
+   */
+  prefetch: (id: string) => {
+    fetch(`${BASE}/products/${id}/prefetch`, { method: 'POST' }).catch(() => {});
+  },
+
   /** Every comparison already generated and saved, newest first. */
   savedReports: (params: { q?: string; page?: number; pageSize?: number; freshOnly?: boolean } = {}) =>
     get<SavedReportPage>('/reports', params as Record<string, string | number | boolean>),

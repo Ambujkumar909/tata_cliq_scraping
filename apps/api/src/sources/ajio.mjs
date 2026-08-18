@@ -1,30 +1,24 @@
 /**
- * Ajio source adapter (pure HTTP, proxy-aware).
+ * Ajio source adapter (pure HTTP, proxy-aware, optional browser session).
  *
- * Ajio sits behind Akamai and denies this egress IP at the edge: HTTP 403 with
- * Akamai's "Access Denied / Reference #18.x" page on EVERY endpoint, including
- * the homepage.
+ * TWO DIFFERENT WALLS, two different fixes — established by measurement:
  *
- * Measured 2026-08-19, all from the same residential Reliance Jio IP in India
- * (ip-api: proxy:false, hosting:false), while myntra.com and tatacliq.com both
- * returned 200:
+ *   SEARCH  `/api/search` gates on IP REPUTATION. Datacenter IPs get 403;
+ *           residential/mobile IPs sail through. Fix: SCRAPE_PROXY.
+ *   PDP     `/api/p/{code}` gates on Akamai's JS-computed `_abck` token, NOT
+ *           the IP. Proven: one machine, one residential IP, one second —
+ *           Node's fetch 403 with every header permutation, the same URL 200
+ *           inside a Chrome tab. No proxy can mint that token.
+ *           Fix: AJIO_BROWSER_COOKIES=true (see ajio-session.mjs).
  *
- *   node fetch                → 403      Playwright Chromium   → 403
- *   impit Chrome TLS profile  → 403      impit Firefox profile → 403
- *
- * So this is NOT a datacenter-IP problem, a TLS/JA3 fingerprint problem, or a
- * missing-cookie problem — a genuine browser engine on a clean residential IP is
- * refused before any bot-sensor runs.
- *
- * A browser sidecar was built and proven to work (headed Chromium under Xvfb
- * reached the PDP where every HTTP client was refused), then removed on
- * request. If Ajio detail is wanted again the options are that sidecar, a
- * rotating residential/mobile proxy via SCRAPE_PROXY, or a managed unblocking
- * API. Until then this degrades gracefully to { blocked: true } rather than
- * inventing empty data.
+ * Both degrade gracefully: search returns { blocked: true }, detail returns
+ * { available: false }, and the report renders "not available" rather than
+ * inventing a difference.
  */
 import { fetchJson } from '../lib/http.mjs';
 import { parseMeasurement } from '../lib/format.mjs';
+import { ajioPdpFetch, ajioBrowserEnabled } from './ajio-session.mjs';
+import { config } from '../config.mjs';
 
 const API = 'https://www.ajio.com/api/search';
 const HEADERS = {
@@ -192,52 +186,60 @@ function extractSizeGuide(data) {
   return { imageUrl, dimensions, table, units: [...units], rows: table.length };
 }
 
-/** PDP payload → the canonical detail shape. Transport-agnostic on purpose:
- *  the plain-HTTP path and the browser path hand it the identical JSON. */
-function mapAjioDetail(data) {
-  const feature = {};
-  for (const g of data.featureData || data.classifications || []) {
-    // Ajio ships featureData FLAT — { name: 'Fabric', featureValues:[{value}] } —
-    // not as classification groups containing features. Reading it as nested
-    // found a name on nothing and silently produced zero attributes, which is
-    // why the Ajio specification cells stayed blank even once the PDP was
-    // reachable. Both shapes are handled: flat first, nested as the fallback.
-    if (g?.name && Array.isArray(g.featureValues)) {
-      const v = g.featureValues.map((x) => x?.value ?? x).filter(Boolean).join(', ');
-      if (v) feature[g.name] = v;
-      continue;
-    }
-    for (const f of g?.features || []) {
-      const k = f.name || f.code;
-      const v = Array.isArray(f.featureValues) ? f.featureValues.map((x) => x.value).join(', ') : f.value;
-      if (k && v) feature[k] = v;
-    }
-  }
-  const images = Array.isArray(data.images) ? data.images.filter((i) => i.format === 'product').length : 0;
-  return {
-    available: true,
-    description: data.description || null,
-    attributes: feature,
-    countryOfOrigin: data.countryOfOrigin || feature['Country of Origin'] || null,
-    imageCount: images || (Array.isArray(data.images) ? data.images.length : 0),
-    sizeGuide: extractSizeGuide(data),
-    videoAvailable: false,
-    inStock: data.stock?.stockLevelStatus !== 'outOfStock',
-    offers: (data.potentialPromotions || []).map((o) => o.description || o.title).filter(Boolean),
-    returnPolicy: data.returnPolicy || null,
-    seller: data.sellerName || null,
-  };
-}
-
 export async function fetchAjioDetail(product) {
   const code = product?.id;
   if (!code) return { available: false, reason: 'no_product_code' };
   try {
-    const data = await fetchJson(`${API.replace('/search', '')}/p/${code}?fields=SITE`, {
-      headers: HEADERS,
-      retries: 1,
-    });
-    return mapAjioDetail(data);
+    let data;
+    if (ajioBrowserEnabled()) {
+      // The PDP API only answers requests originating INSIDE a real page — see
+      // ajio-session.mjs for the measurements. Seed the page on this product's
+      // own PDP so the first call warms and reads in one navigation.
+      data = await ajioPdpFetch(code, product.url);
+      if (!data) return { available: false, reason: 'browser_session_unavailable' };
+    } else {
+      data = await fetchJson(`${API.replace('/search', '')}/p/${code}?fields=SITE`, {
+        headers: HEADERS,
+        retries: 1,
+      });
+    }
+    // Ajio ships a FLAT feature list — [{ name, featureValues: [{ value }] }] —
+    // while `classifications` (older shape) nests them under groups. Handle
+    // both: reading only the grouped shape silently produced empty specs.
+    const feature = {};
+    const addFeature = (f) => {
+      const k = f?.name || f?.code;
+      const v = Array.isArray(f?.featureValues)
+        ? f.featureValues.map((x) => x.value).filter(Boolean).join(', ')
+        : f?.value;
+      if (k && v) feature[k] = v;
+    };
+    for (const f of data.featureData || []) addFeature(f);
+    for (const g of data.classifications || []) for (const f of g.features || []) addFeature(f);
+    const images = Array.isArray(data.images) ? data.images.filter((i) => i.format === 'product').length : 0;
+    return {
+      available: true,
+      // Ajio usually leaves `description` empty and puts the marketing prose in
+      // an "Additional Information" feature instead — without this fallback the
+      // description signal and content-quality row read as zero for every Ajio
+      // product that in fact has copy.
+      description:
+        data.description ||
+        feature['Additional Information 1'] ||
+        feature['Additional Information'] ||
+        null,
+      // Verified against a live PDP: the chart hides in
+      // fnlColorVariantData.sizeGuideDesktop as a JSON *string*.
+      sizeGuide: extractSizeGuide(data),
+      attributes: feature,
+      countryOfOrigin: data.countryOfOrigin || feature['Country of Origin'] || null,
+      imageCount: images || (Array.isArray(data.images) ? data.images.length : 0),
+      videoAvailable: false,
+      inStock: data.stock?.stockLevelStatus !== 'outOfStock',
+      offers: (data.potentialPromotions || []).map((o) => o.description || o.title).filter(Boolean),
+      returnPolicy: data.returnPolicy || null,
+      seller: data.sellerName || null,
+    };
   } catch (err) {
     if (err.status === 403) return { available: false, reason: 'akamai-ip-block' };
     return { available: false, reason: err.message };

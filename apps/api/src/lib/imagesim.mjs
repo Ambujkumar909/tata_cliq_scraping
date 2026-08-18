@@ -50,6 +50,40 @@ export function hamming(a, b) {
 const _cache = new Map();
 
 /**
+ * Rewrite a marketplace CDN URL to a small rendition. The pipeline resizes to
+ * 96px before sampling, so the default 437–1080px assets waste ~90% of the
+ * transfer — on a mobile uplink that difference is most of a second per image.
+ * Unknown URL shapes pass through unchanged; a failed small fetch falls back to
+ * the original, so this can only make things faster, never blinder.
+ */
+function smallVariant(u) {
+  // Tata CLIQ: .../437Wx649H/... and _437Wx649H_ filename segments
+  let s = u.replace(/\/(\d{3,4})Wx(\d{3,4})H\//g, '/158Wx198H/').replace(/_(\d{3,4})Wx(\d{3,4})H_/g, '_158Wx198H_');
+  // Ajio: .../-473Wx593H-... rendition markers
+  s = s.replace(/-(\d{3,4})Wx(\d{3,4})H-/g, '-286Wx359H-');
+  // Myntra assets: transformation params h_NNN / w_NNN / q_NN / dpr_N
+  if (/myntassets\.com/.test(s)) {
+    s = s.replace(/([,(/])h_\d{3,4}/g, '$1h_256').replace(/([,(/])w_\d{3,4}/g, '$1w_192')
+      .replace(/([,(/])q_\d{2,3}/g, '$1q_60').replace(/dpr_\d/g, 'dpr_1');
+  }
+  return s;
+}
+
+async function fetchBuffer(u, timeoutMs) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: ctrl.signal });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
  * Returns { lab, rgb, dhash, sampled, region } or null. Never throws.
  *
  * `region` must match the garment class — reading a chest box on a jeans photo
@@ -63,12 +97,10 @@ export async function fetchImageSignature(url, { region = 'top', timeoutMs = 120
 
   let out = null;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    const res = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: ctrl.signal });
-    clearTimeout(t);
-    if (res.ok) {
-      const buf = Buffer.from(await res.arrayBuffer());
+    const small = smallVariant(u);
+    let buf = await fetchBuffer(small, timeoutMs);
+    if (!buf && small !== u) buf = await fetchBuffer(u, timeoutMs); // rendition missing → original
+    if (buf) {
       const [color, hash] = await Promise.all([
         garmentColor(buf, region).catch(() => null),
         dhash(buf).catch(() => null),

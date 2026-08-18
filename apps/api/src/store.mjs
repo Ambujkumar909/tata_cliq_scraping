@@ -141,11 +141,28 @@ class Store {
    */
   async getFreshComparison(id) {
     const local = this.comparisons.get(id);
-    if (local) return isFresh(local) ? local : null;
+    if (local) return this._replayable(local) ? local : null;
     const saved = await persistence.load(id);
     if (!saved) return null;
     this.comparisons.set(id, saved); // warm memory for the catalog grid
-    return isFresh(saved) ? saved : null;
+    return this._replayable(saved) ? saved : null;
+  }
+
+  /**
+   * A comparison is replayable when it is within TTL — UNLESS it recorded a
+   * transient failure (blocked / error). Those describe a bad network moment,
+   * not the product: a comparison saved while Ajio rate-limited a burst would
+   * otherwise show "blocked" for seven days after one bad minute. Negative
+   * results get a 10-minute replay window, then a fresh attempt.
+   */
+  _replayable(cmp) {
+    if (!isFresh(cmp)) return false;
+    const transientFailure = Object.values(cmp.competitors || {}).some(
+      (m) => m?.status === 'blocked' || m?.status === 'error',
+    );
+    if (!transientFailure) return true;
+    const age = ageHours(cmp);
+    return age != null && age < 10 / 60;
   }
 
   setComparison(id, cmp) {

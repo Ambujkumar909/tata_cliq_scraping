@@ -3,7 +3,16 @@ import { motion } from 'framer-motion';
 import { TrendingDown, TrendingUp, Minus, ArrowRight } from 'lucide-react';
 import type { ProductListItem, Platform } from '@/lib/types';
 import { inr } from '@/lib/format';
-import { PLATFORM_META } from '@/lib/api';
+import { api, PLATFORM_META } from '@/lib/api';
+
+// Hover = intent. Prefetch each uncompared product once per session so the
+// live match is already running (or done) by the time the click lands.
+const prefetched = new Set<string>();
+function prefetchOnHover(p: ProductListItem) {
+  if (p.comparison || prefetched.has(p.id)) return;
+  prefetched.add(p.id);
+  api.prefetch(p.id);
+}
 
 function CheapestPill({ platform }: { platform: Platform }) {
   const m = PLATFORM_META[platform];
@@ -44,6 +53,8 @@ export function ProductCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: Math.min(index * 0.02, 0.3) }}
       whileHover={{ y: -6 }}
+      onMouseEnter={() => prefetchOnHover(p)}
+      onFocus={() => prefetchOnHover(p)}
       onClick={onOpen}
       className="group relative flex flex-col overflow-hidden rounded-2xl glass glass-hover text-left"
     >

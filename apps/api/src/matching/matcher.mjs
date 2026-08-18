@@ -38,16 +38,12 @@ const SOURCES = {
   ajio: { search: searchAjio, detail: fetchAjioDetail },
 };
 
-// How many top-ranked candidates may get the expensive PDP + image treatment.
-// Evaluated lazily with an early exit, so a clean top hit still costs one fetch.
-// Rejections (wrong colourway, model conflict) do NOT consume the budget —
-// otherwise five look-alikes ahead of the true SKU starve it of its slot —
-// but total fetches are still bounded by MAX_SCAN.
+// How many top-ranked candidates get the expensive PDP + image treatment.
+// A batch of MAX_ENRICH is evaluated in PARALLEL (wall-clock = one round-trip);
+// a second batch fires only if the first was entirely rejected (wrong
+// colourway etc.), bounded by MAX_SCAN in total.
 const MAX_ENRICH = 5;
 const MAX_SCAN = 10;
-// Stop enriching once a candidate is this convincing — more fetches cannot
-// change the outcome.
-const EARLY_EXIT_SCORE = 0.85;
 // Δe a colour-FAMILY conflict must beat to survive. Deliberately far stricter
 // than COLOR_CONFIRM (15): at 15 the engine "confirmed" grey against blue.
 const CONFLICT_PROOF_DE = 8;
@@ -158,6 +154,7 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
   const anchor = anchorCtx.product;
   const { search, detail: fetchDetail } = SOURCES[sourceName];
   const queries = buildQueries(anchor);
+  const tSearch = Date.now();
 
   // ── Layer 1: retrieval ──────────────────────────────────────
   const pages = await Promise.all(
@@ -203,11 +200,14 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
     )
   ).sort((a, b) => (b.ev.score ?? 0) + 0.1 * b.colorAff - ((a.ev.score ?? 0) + 0.1 * a.colorAff));
 
-  // ── Layer 3b: enrich finalists lazily, with early exit ──────
+  // ── Layer 3b: enrich finalists in PARALLEL batches ──────────
+  // This loop used to run one candidate at a time — up to 10 sequential rounds
+  // of (PDP fetch + image fetch) per source, which measured ~24s per click on
+  // a mobile uplink. A whole batch now flies together: wall-clock is ONE
+  // round-trip per batch, and a second batch fires only if every candidate in
+  // the first was rejected (wrong colourway etc.).
   const scored = [];
-  let enriched = 0;
-  for (const f of ranked.slice(0, MAX_SCAN)) {
-    if (enriched >= MAX_ENRICH) break;
+  const evaluateOne = async (f) => {
     // Sample the candidate's image in the SAME garment region as the anchor —
     // comparing a chest crop against a leg crop is meaningless.
     const [detail, imageSig] = await Promise.all([
@@ -251,10 +251,22 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
       rejected = 'model_mismatch';
     }
 
-    scored.push({ ...f, candCtx, ev, rejected });
-    if (!rejected) enriched++; // rejected candidates don't consume the budget
-    if (!rejected && (ev.score ?? 0) >= EARLY_EXIT_SCORE) break;
+    return { ...f, candCtx, ev, rejected };
+  };
+
+  const tEnrich = Date.now();
+  const searchMs = tEnrich - tSearch;
+  const pool = ranked.slice(0, MAX_SCAN);
+  for (let i = 0; i < pool.length; i += MAX_ENRICH) {
+    const batch = await Promise.all(pool.slice(i, i + MAX_ENRICH).map(evaluateOne));
+    scored.push(...batch);
+    // Stop as soon as any batch produced a viable candidate — the next batch
+    // is ranked lower and could only matter if everything here was rejected.
+    if (batch.some((s) => !s.rejected)) break;
   }
+  // Phase timings ride on every result — "it feels slow" should always be
+  // answerable from the response itself, not by re-instrumenting the server.
+  const timing = { searchMs, enrichMs: Date.now() - tEnrich, enriched: scored.length };
 
   const viable = scored.filter((s) => !s.rejected).sort((a, b) => (b.ev.score ?? 0) - (a.ev.score ?? 0));
 
@@ -349,6 +361,7 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
   const d = best.candCtx.detail;
   return {
     status: 'matched',
+    timing,
     query,
     scanned: candidates.length,
     score: best.ev.score,
@@ -400,11 +413,26 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
  * Anchor PDP + image signature are fetched ONCE and shared across sources.
  */
 export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true } = {}) {
+  const tStart = Date.now();
   const anchor = enrichAnchor(anchorRaw);
 
-  // Detail FIRST, not in parallel: the garment type decides which region of the
-  // photo actually shows the product, so the image signature depends on it.
-  const detail = await fetchCliqDetail(anchor.id).catch(() => ({ available: false, reason: 'detail_error' }));
+  // The image sampling region depends on the garment type. When the TITLE
+  // already names the garment (the common case), detail and image fetch fly in
+  // parallel; only a garment-silent title serializes them, because then the
+  // region must wait for the PDP breadcrumb.
+  const detailPromise = fetchCliqDetail(anchor.id).catch(() => ({ available: false, reason: 'detail_error' }));
+  let detail, imageSig, imageRegion;
+  if (anchor.garment) {
+    imageRegion = regionForGarment(anchor.garment);
+    [detail, imageSig] = await Promise.all([
+      detailPromise,
+      fetchImageSignature(anchor.image, { region: imageRegion }),
+    ]);
+  } else {
+    detail = await detailPromise;
+    imageRegion = regionForGarment(garmentFromCategoryPath(detail?.categoryPath));
+    imageSig = await fetchImageSignature(anchor.image, { region: imageRegion });
+  }
 
   // The PDP breadcrumb is the most reliable garment signal CLIQ publishes —
   // fold it in before gating.
@@ -414,15 +442,17 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
     garment: anchor.garment || garmentFromCategoryPath(detail?.categoryPath),
     gender: anchor.gender || genderFromDetail(detail),
   };
-  const imageRegion = regionForGarment(resolved.garment);
-  const imageSig = await fetchImageSignature(anchor.image, { region: imageRegion });
   const anchorCtx = { product: resolved, detail, imageSig, imageRegion };
+  const anchorMs = Date.now() - tStart;
 
   const names = Object.keys(SOURCES);
   const settled = await Promise.all(
-    names.map((n) =>
-      matchOne(anchorCtx, n, { minScore, strictSku }).catch((err) => ({ status: 'error', reason: err.message })),
-    ),
+    names.map(async (n) => {
+      const t0 = Date.now();
+      const m = await matchOne(anchorCtx, n, { minScore, strictSku }).catch((err) => ({ status: 'error', reason: err.message }));
+      m.tookMs = Date.now() - t0;
+      return m;
+    }),
   );
   const competitors = {};
   names.forEach((n, i) => (competitors[n] = settled[i]));
@@ -489,6 +519,7 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
       matchedCount: names.filter((n) => competitors[n].status === 'matched').length,
     },
     matchedAt: new Date().toISOString(),
+    timing: { anchorMs, totalMs: Date.now() - tStart },
   };
 }
 
