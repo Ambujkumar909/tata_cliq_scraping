@@ -65,6 +65,15 @@ function comparisonColumns() {
     { header: 'Product', key: 'title', width: 44, get: (r) => r.title },
     { header: 'Category', key: 'category', width: 16, get: (r) => r.categoryLabel },
     { header: 'Gender', key: 'gender', width: 11, get: (r) => r.genderLabel },
+    // Sizes the matched listings actually offer, comma-separated in wearing
+    // order (XS → 5XL, then numeric). It sits with the other identity columns
+    // because "which sizes" is part of what the product IS, not part of the
+    // price story — and because the export dialog already filters on it, a
+    // reader needs the column to check the filter did what they asked.
+    // Blank means no match was proven, not "sold in no sizes": CLIQ's own PDP
+    // payload publishes no size list, so a row with no competitor match has no
+    // honest source for one.
+    { header: 'Sizes', key: 'sizes', width: 22, get: (r) => (r.sizes?.length ? r.sizes.join(', ') : null) },
     { header: 'MRP', key: 'cliqMrp', width: 11, get: (r) => r.cliqMrp, fmt: MONEY },
   ];
 
@@ -191,6 +200,7 @@ function writeComparisonSheet(wb, rows, sheetName, cols) {
 
     row.getCell(at('recommendation')).alignment = { wrapText: true, vertical: 'top' };
     row.getCell(at('title')).alignment = { wrapText: true, vertical: 'top' };
+    row.getCell(at('sizes')).alignment = { wrapText: true, vertical: 'top' };
   }
 
   sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
@@ -334,6 +344,7 @@ function writeSummarySheet(wb, rows, filters, meta) {
     ['MIDDLE', 'Neither cheapest nor dearest', AMBER_BG, AMBER],
     ['DEAREST', 'Highest of the three prices for that product', RED_BG, RED],
     ['No match', 'No comparable listing was proven on that platform — not that the product is unavailable', null, null],
+    ['Sizes', 'Sizes offered by the matched Myntra / Ajio listings; blank where nothing was matched', null, null],
   ]) {
     const r = sheet.addRow([swatch, text]);
     r.getCell(1).font = { bold: true, size: 10, color: { argb: `FF${fg ?? MUTED}` } };
