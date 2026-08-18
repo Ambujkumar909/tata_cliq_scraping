@@ -8,6 +8,7 @@
  * catalog recall. Falls back to HTML parsing if the gateway is unavailable.
  */
 import { extractJsonAfter } from '../lib/http.mjs';
+import { parseMeasurement } from '../lib/format.mjs';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -139,6 +140,84 @@ function plain(s) {
 }
 
 /**
+ * Myntra's size chart, in the canonical cross-platform shape.
+ *
+ * Unlike CLIQ there is no separate size-guide endpoint: the measurements ride
+ * along on each entry of `pdpData.sizes` (the same array that carries stock),
+ * as `measurements:[{name,value,unit,measurementType}]`. The lowercase
+ * `pdpData.sizechart` key holds only the illustration URL — an earlier reading
+ * of `sizeChart` (capital C) matched nothing, which is why Myntra used to
+ * report no chart at all.
+ *
+ * `measurementType` is GARMENT or BODY. It is carried through per axis, because
+ * comparing a body measurement against a garment one invents differences.
+ */
+function extractSizeGuide(d) {
+  const table = [];
+  const axisOrder = [];
+  const units = new Set();
+
+  for (const s of d?.sizes || []) {
+    const size = String(s?.label ?? '').trim();
+    if (!size) continue;
+    const measurements = {};
+    const basis = {};
+    for (const m of s.measurements || []) {
+      const name = String(m?.name || '').trim();
+      if (!name) continue;
+      // Myntra carries minValue/maxValue beside value; when they differ the
+      // measurement is a range and collapsing it to `value` loses the spread.
+      const lo = parseMeasurement(m?.minValue);
+      const hi = parseMeasurement(m?.maxValue);
+      const mid = parseMeasurement(m?.value) ?? lo ?? hi;
+      if (!mid) continue;
+      const unit = /^in/i.test(m.unit || '') ? 'inch' : 'cm';
+      const rangeLo = Math.min(lo?.lo ?? mid.lo, mid.lo);
+      const rangeHi = Math.max(hi?.hi ?? mid.hi, mid.hi);
+      measurements[name] = {
+        [unit]: mid.value,
+        ...(rangeLo !== rangeHi ? { [`${unit}Range`]: [rangeLo, rangeHi] } : {}),
+      };
+      units.add(unit);
+      basis[name] = String(m.measurementType || m.type || '').toUpperCase() === 'BODY' ? 'body' : 'garment';
+      if (!axisOrder.includes(name)) axisOrder.push(name);
+    }
+    if (!Object.keys(measurements).length) continue;
+    // Footwear ships uk_size / us_size / euro_size here instead of a brand
+    // label. They are scale conversions of one size, not measurements, so they
+    // travel beside the row rather than becoming chart columns.
+    const scaleList = s.allSizesList || [];
+    const scaleOf = (re) => scaleList.find((a) => re.test(a?.scaleCode || ''))?.sizeValue ?? null;
+    const scales = { uk: scaleOf(/^uk/i), us: scaleOf(/^us/i), euro: scaleOf(/^euro/i) };
+
+    table.push({
+      size,
+      // Myntra's scale list carries the brand's own label when it differs from
+      // the Myntra-normalised one (e.g. brand "40" shown as size "M").
+      brandSize: scaleOf(/brand/i) ?? size,
+      available: s.available ?? null,
+      measurements,
+      basis,
+      ...(scales.uk || scales.us || scales.euro ? { scales } : {}),
+    });
+  }
+
+  const imageUrl =
+    typeof d?.sizechart?.sizeRepresentationUrl === 'string' ? d.sizechart.sizeRepresentationUrl
+    : typeof d?.sizechart?.sizeChartUrl === 'string' ? d.sizechart.sizeChartUrl
+    : null;
+
+  if (!table.length && !imageUrl) return null;
+  return {
+    imageUrl,
+    dimensions: axisOrder,
+    table,
+    units: [...units],
+    rows: table.length,
+  };
+}
+
+/**
  * Fetch a Myntra PDP and pull the detail tier the comparison report needs.
  *
  * The PDP HTML embeds the full `window.__myx` payload — `articleAttributes`
@@ -185,22 +264,7 @@ export async function fetchMyntraDetail(product, { timeoutMs } = {}) {
       }
     }
 
-    /**
-     * Myntra publishes its size chart as structured measurements rather than an
-     * image. Reported in the same shape as CLIQ's so the report can compare
-     * like with like — "has a chart, measured on these axes".
-     */
-    const sizeChart = d.sizeChart || d.sizeChartUrl || null;
-    const dimensions = Array.isArray(d.sizeChart?.sizeRepresentationUrl)
-      ? []
-      : (d.sizeChart?.dimensions || []).map((x) => x?.name).filter(Boolean);
-    const sizeGuide = sizeChart
-      ? {
-          imageUrl: typeof d.sizeChart?.sizeRepresentationUrl === 'string' ? d.sizeChart.sizeRepresentationUrl : null,
-          dimensions: [...new Set(dimensions)],
-          rows: (d.sizeChart?.sizeChartUnits || []).length || 0,
-        }
-      : null;
+    const sizeGuide = extractSizeGuide(d);
 
     return {
       available: true,

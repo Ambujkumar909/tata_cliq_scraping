@@ -236,17 +236,6 @@ function sizeText(product) {
   return out.length ? `${live.join(', ')}  (${out.join(', ')} out of stock)` : live.join(', ');
 }
 
-/** "Chart + image · Chest, Length" — what the platform actually publishes. */
-function sizeGuideText(product) {
-  const g = product?.sizeGuide;
-  if (!g) return null;
-  const bits = [];
-  if (g.imageUrl) bits.push('Chart image');
-  if (g.dimensions?.length) bits.push(g.dimensions.slice(0, 4).join(', '));
-  else if (g.rows) bits.push(`${g.rows} size rows`);
-  return bits.join(' · ') || 'Available';
-}
-
 function pricingGroup(cols) {
   const prices = cols.map((c) => c.product?.price ?? null);
   const mrps = cols.map((c) => c.product?.mrp ?? null);
@@ -350,7 +339,6 @@ function specsGroup(cols) {
       // rather than agreement.
       row('Sizes Available', cols, (c) => sizeText(c.product), (v) =>
         v == null ? NA : /out of stock/i.test(v) ? MODERATE : BEST),
-      row('Size Chart', cols, (c) => sizeGuideText(c.product), (v) => (v ? BEST : NA)),
     ].filter((r) => r.cells.some((x) => x.value != null)),
   };
 }
@@ -497,6 +485,22 @@ function decisionSummary(cols, cmp) {
     }
   }
 
+  // Size-chart disagreement is a returns driver, not a pricing one: the same
+  // SKU measured differently on two platforms means one of them is setting the
+  // wrong expectation. Surfaced ahead of content gaps because it costs money.
+  const sc = cmp?.sizeChart;
+  if (sc?.summary?.major) {
+    insights.push(
+      `Size charts disagree on ${sc.summary.major} measurement${sc.summary.major > 1 ? 's' : ''} — ${sc.flags[0].text}`,
+    );
+  } else if (sc?.summary?.minor) {
+    insights.push(
+      `Size charts differ slightly on ${sc.summary.minor} measurement${sc.summary.minor > 1 ? 's' : ''}, within ${sc.tolerance.majorIn}".`,
+    );
+  } else if (sc?.summary?.verdict === 'consistent' && sc.summary.comparedCells) {
+    insights.push(`Size charts agree across ${sc.platforms.length} platforms (${sc.summary.comparedCells} measurements compared).`);
+  }
+
   // Content-quality gap is a lever CLIQ controls directly.
   const srcImages = src.content?.imageCount ?? 0;
   for (const t of matched) {
@@ -521,8 +525,36 @@ function decisionSummary(cols, cmp) {
   };
 }
 
+/**
+ * Header-level size-chart alarm.
+ *
+ * The size-chart section proves the detail; this is the flag that makes a
+ * merchandiser scroll to it. Two platforms measuring the same SKU differently
+ * is a returns driver, so it is surfaced at the top of the report rather than
+ * only inside the table.
+ */
+function sizeChartFlag(cmp) {
+  const sc = cmp?.sizeChart;
+  if (!sc?.summary) return null;
+  const { major, minor, comparedCells, verdict } = sc.summary;
+  if (!major && !minor) {
+    return verdict === 'consistent' && comparedCells
+      ? { severity: 'none', label: 'Size charts match', detail: `${comparedCells} measurements agree across platforms.` }
+      : null;
+  }
+  const count = major || minor;
+  return {
+    severity: major ? 'major' : 'minor',
+    label: major ? 'Size chart differs' : 'Size chart varies slightly',
+    detail:
+      `${count} measurement${count > 1 ? 's' : ''} differ${count > 1 ? '' : 's'}` +
+      `${sc.flags[0] ? ` — ${sc.flags[0].text}` : '.'}`,
+    counts: { major, minor, compared: comparedCells },
+  };
+}
+
 /** Overall header confidence + a one-line reason. */
-function header(cols, summary) {
+function header(cols, summary, cmp) {
   const src = cols[0];
   const best = summary.bestMatch;
   const reasonBits = [];
@@ -543,6 +575,9 @@ function header(cols, summary) {
     overallConfidence: summary.confidence,
     matchType: summary.matchType,
     matchReason: reasonBits.join(' '),
+    // Null when nothing comparable exists — no chart, or only one platform
+    // published one. Absence of a flag never means "charts agree".
+    sizeChartFlag: sizeChartFlag(cmp),
   };
 }
 
@@ -558,7 +593,7 @@ export function buildReport(cmp) {
     kind: 'product_match_comparison_report',
     generatedAt: new Date().toISOString(),
     matchedAt: cmp.matchedAt ?? null,
-    header: header(columns, summary),
+    header: header(columns, summary, cmp),
     columns: columns.map((c) => ({
       key: c.key,
       platform: c.platform,
@@ -578,6 +613,9 @@ export function buildReport(cmp) {
       contentGroup(columns),
       scoresGroup(columns),
     ],
+    // Cross-platform size-chart table. Null when no platform published a chart,
+    // so the UI omits the section instead of rendering an empty grid.
+    sizeChart: cmp.sizeChart ?? null,
     decision: summary,
     legend: [
       { verdict: BEST, label: 'Best / Higher' },

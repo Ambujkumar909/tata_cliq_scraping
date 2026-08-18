@@ -14,6 +14,7 @@
  * into exactly the canonical shape the matcher and report consume.
  */
 import { fetchJson } from '../lib/http.mjs';
+import { parseMeasurement } from '../lib/format.mjs';
 
 const SEARCH = 'https://searchbff.tatacliq.com/products/mpl/search';
 // Base for every per-product endpoint. DETAIL appends the productDetails
@@ -214,13 +215,46 @@ function extractSizes(variantOptions) {
     const s = v?.sizelink;
     const label = (s?.size ?? s?.brandSize ?? '').toString().trim();
     if (!label) continue;
-    const hit = out.get(label) || { size: label, available: false, stock: 0 };
+    const hit = out.get(label) || {
+      size: label,
+      brandSize: (s.brandSize ?? '').toString().trim() || null,
+      available: false,
+      stock: 0,
+    };
     if (s.isAvailable) hit.available = true;
     const n = Number(s.stockCount);
     if (Number.isFinite(n)) hit.stock += n;
     out.set(label, hit);
   }
   return [...out.values()];
+}
+
+/**
+ * Fold live variant stock into the chart rows.
+ *
+ * The chart and the variant list are separate endpoints keyed on the same
+ * product, so the join is by size label (case/space-insensitive — CLIQ writes
+ * "XXL" in one and "xxl " in the other often enough to matter). This is what
+ * lets the chart render a sold-out size struck through, exactly as the
+ * storefront does, instead of implying every published size is buyable.
+ */
+function mergeSizeAvailability(sizeGuide, sizes) {
+  if (!sizeGuide?.table?.length) return sizeGuide;
+  const key = (s) => String(s || '').toUpperCase().replace(/\s+/g, '');
+  const bySize = new Map(sizes.map((s) => [key(s.size), s]));
+  return {
+    ...sizeGuide,
+    table: sizeGuide.table.map((row) => {
+      const live = bySize.get(key(row.size));
+      return {
+        ...row,
+        brandSize: live?.brandSize ?? row.size,
+        // null, not false, when the product ships no variant list at all —
+        // "unknown" and "out of stock" must not look alike in the report.
+        available: live ? live.available : null,
+      };
+    }),
+  };
 }
 
 /**
@@ -237,20 +271,91 @@ export async function fetchCliqSizeGuide(productId) {
       { headers: HEADERS, retries: 1 },
     );
     if (d?.status && String(d.status).toLowerCase() !== 'success') return null;
-    // Each measurement is repeated once per unit (CMS and INCH), so the Set
-    // below is doing real work, not defensive de-duplication.
-    const dimensions = [];
+
+    // CLIQ ships one dimensionList entry per (measurement × unit), unordered,
+    // so a size row arrives as e.g. CHEST/INCH, SHOULDER/CMS, SHOULDER/INCH,
+    // CHEST/CMS. Fold each row into { axis: { inch, cm } } and keep the axis
+    // order CLIQ encodes in the "1.", "2." prefixes — that is the column order
+    // the storefront chart renders.
+    const axisOrder = new Map(); // titleCased axis → ordinal
+    const table = [];
     for (const g of d?.sizeGuideList || []) {
-      for (const dim of g?.dimensionList || []) {
-        if (dim?.dimension) dimensions.push(titleCase(dim.dimension));
+      const size = String(g?.dimensionSize ?? '').trim();
+      if (!size) {
+        // FOOTWEAR uses a different schema entirely: no group-level size, and
+        // each dimensionList entry IS a size row carrying the scale conversions
+        // (dimensionSize = UK, usSize, euroSize) plus `footlength`. Parsed with
+        // the apparel path this yields nothing at all, which is why shoe charts
+        // used to come back empty.
+        for (const entry of g?.dimensionList || []) {
+          const uk = String(entry?.dimensionSize ?? '').trim();
+          if (!uk) continue;
+          const len = parseMeasurement(entry.footlength);
+          const unit = /inch/i.test(entry.dimensionUnit || '') ? 'inch' : 'cm';
+          const measurements = {};
+          const basis = {};
+          if (len) {
+            // "Foot length" is the wearer's foot, not the shoe — the same basis
+            // as Myntra's "To Fit Foot Length", so they compare like with like.
+            measurements['Foot Length'] = {
+              [unit]: len.value,
+              ...(len.lo !== len.hi ? { [`${unit}Range`]: [len.lo, len.hi] } : {}),
+            };
+            basis['Foot Length'] = 'body';
+            if (!axisOrder.has('Foot Length')) axisOrder.set('Foot Length', 1);
+          }
+          table.push({
+            size: uk,
+            brandSize: uk,
+            measurements,
+            basis,
+            // UK / US / EU are the same shoe, not three measurements — they are
+            // scale labels, kept beside the row rather than as chart columns.
+            scales: {
+              uk: uk || null,
+              us: String(entry.usSize ?? '').trim() || null,
+              euro: String(entry.euroSize ?? '').trim() || null,
+            },
+          });
+        }
+        continue;
       }
+      const measurements = {};
+      for (const dim of g?.dimensionList || []) {
+        if (!dim?.dimension) continue;
+        const axis = titleCase(dim.dimension);
+        const ord = Number(String(dim.dimension).match(/^\s*(\d+)/)?.[1] ?? 99);
+        if (!axisOrder.has(axis) || ord < axisOrder.get(axis)) axisOrder.set(axis, ord);
+        // Ranges are common ("36 - 38"), so every value is an interval.
+        const parsed = parseMeasurement(dim.dimensionValue);
+        if (!parsed) continue;
+        const unit = /inch/i.test(dim.dimensionUnit || '') ? 'inch' : 'cm';
+        measurements[axis] = {
+          ...(measurements[axis] || {}),
+          [unit]: parsed.value,
+          ...(parsed.lo !== parsed.hi ? { [`${unit}Range`]: [parsed.lo, parsed.hi] } : {}),
+        };
+      }
+      table.push({ size, measurements });
     }
+
+    const dimensions = [...axisOrder.entries()]
+      .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+      .map(([axis]) => axis);
     const imageUrl = abs(d?.imageURL) || null;
     if (!imageUrl && !dimensions.length) return null;
     return {
       imageUrl,
-      // De-duplicated measurement axes, e.g. "Chest", "Length", "Shoulder".
-      dimensions: [...new Set(dimensions)],
+      // Measurement axes in storefront column order, e.g. "Chest", "Front
+      // Length", "Across Shoulder".
+      dimensions,
+      // Full chart: one entry per size, values in both units where published.
+      table,
+      // Units actually present, so a renderer can offer the inch/cm toggle
+      // only when CLIQ really published both.
+      units: [
+        ...new Set(table.flatMap((r) => Object.values(r.measurements).flatMap((m) => Object.keys(m)))),
+      ],
       rows: (d?.sizeGuideList || []).length,
     };
   } catch {
@@ -273,6 +378,7 @@ export async function fetchCliqDetail(productId) {
       fetchCliqSizeGuide(productId),
     ]);
     const pairs = detailPairs(d.details);
+    const sizes = extractSizes(d.variantOptions);
     const images = galleryImages(d.galleryImagesList);
     const description = d.productDescription || d.styleNote || null;
 
@@ -297,8 +403,8 @@ export async function fetchCliqDetail(productId) {
       imageCount: images.length,
       images,
       // Live per-size stock, straight off the PDP's variant list.
-      sizes: extractSizes(d.variantOptions),
-      sizeGuide,
+      sizes,
+      sizeGuide: mergeSizeAvailability(sizeGuide, sizes),
       videoAvailable: Boolean(
         (d.imageGalleryAttributes || []).some?.((a) => /video/i.test(a?.key || '')) || d.videoUrl,
       ),

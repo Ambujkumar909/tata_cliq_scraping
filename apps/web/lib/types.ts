@@ -185,6 +185,62 @@ export interface ReportDecision {
   posture: 'undercut' | 'winning' | 'parity' | 'unknown';
 }
 
+/** One measurement on one platform, in both units where published. */
+export interface SizeMeasurement {
+  /** Midpoint when the platform published a range. */
+  inch: number | null;
+  cm: number | null;
+  /** Present only when the platform published a span, e.g. "36 - 38". */
+  inchRange?: [number, number];
+  cmRange?: [number, number];
+}
+
+export interface SizeChartCell {
+  values: Partial<Record<Platform, SizeMeasurement | null>>;
+  /** 'match' · 'mismatch' · 'single' (only one platform published it) · 'na'. */
+  status: 'match' | 'mismatch' | 'single' | 'na';
+  /** Largest gap between platforms, in inches. */
+  delta: number | null;
+  severity: 'minor' | 'major' | null;
+  low?: Platform | null;
+  high?: Platform | null;
+}
+
+export interface SizeChartRow {
+  size: string;
+  labels: Partial<Record<Platform, string | null>>;
+  brandSizes: Partial<Record<Platform, string | null>>;
+  available: Partial<Record<Platform, boolean | null>>;
+  /** Footwear only: how each platform labels this shoe on the UK/US/EU scales. */
+  scales: Partial<Record<Platform, { uk: string | null; us: string | null; euro: string | null } | null>>;
+  /** Set when exactly one platform sells this size — a catalog gap, not a mismatch. */
+  onlyOn: Platform | null;
+  cells: Record<string, SizeChartCell>;
+}
+
+export interface SizeChartComparison {
+  platforms: Platform[];
+  /** Why a platform contributes no chart: 'akamai-ip-block', 'no_match', 'not_published'… */
+  unavailable: Partial<Record<Platform, string>>;
+  axes: { key: string; axis: string; basis: 'garment' | 'body'; label: string }[];
+  unit: 'inch';
+  tolerance: { matchIn: number; majorIn: number };
+  images: Partial<Record<Platform, string | null>>;
+  rows: SizeChartRow[];
+  flags: {
+    size: string; axis: string; delta: number;
+    severity: 'minor' | 'major'; low: Platform; high: Platform; text: string;
+  }[];
+  summary: {
+    comparedCells: number;
+    matched: number;
+    minor: number;
+    major: number;
+    sizesOnlyOnOnePlatform: { size: string; platform: Platform }[];
+    verdict: 'consistent' | 'minor_variance' | 'mismatch' | 'single_source' | 'not_comparable';
+  };
+}
+
 export interface MatchReport {
   kind: string;
   generatedAt: string;
@@ -203,9 +259,22 @@ export interface MatchReport {
     overallConfidence: number | null;
     matchType: string;
     matchReason: string;
+    /**
+     * Set when the platforms' size charts were comparable. severity 'none'
+     * means they agree; null means nothing was comparable, which is NOT the
+     * same as agreement.
+     */
+    sizeChartFlag: {
+      severity: 'none' | 'minor' | 'major';
+      label: string;
+      detail: string;
+      counts?: { major: number; minor: number; compared: number };
+    } | null;
   };
   columns: ReportColumn[];
   groups: ReportGroup[];
+  /** Null when no platform published a size chart for this product. */
+  sizeChart: SizeChartComparison | null;
   decision: ReportDecision;
   legend: { verdict: Verdict; label: string }[];
   summary: ComparisonSummary;

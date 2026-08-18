@@ -218,10 +218,25 @@ export function CompareModal({
         onClick={onClose}
       >
         <motion.div
-          className="relative max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl glass p-5 shadow-glow sm:rounded-3xl sm:p-7"
-          initial={{ y: 40, opacity: 0, scale: 0.98 }}
+          /**
+           * Quick compare is a dialog; the full report is a document. The report
+           * is a wide multi-column table plus the size-chart matrix, and reading
+           * it inside a 4xl box meant scrolling sideways through both. In report
+           * view the shell takes the whole viewport instead.
+           */
+          className={
+            view === 'report'
+              ? 'relative h-[100dvh] w-screen overflow-y-auto rounded-none glass p-4 shadow-glow sm:p-6'
+              : 'relative max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-t-3xl glass p-5 shadow-glow sm:rounded-3xl sm:p-7'
+          }
+          // A dialog rises into place; a full-screen document just appears.
+          // Sliding and scaling the whole viewport reads as a glitch.
+          initial={view === 'report' ? { opacity: 0 } : { y: 40, opacity: 0, scale: 0.98 }}
+          // y/scale stay in the target of BOTH views: switching to the report
+          // mid-spring would otherwise strand the panel at the entry offset,
+          // since framer only settles the properties the target names.
           animate={{ y: 0, opacity: 1, scale: 1 }}
-          exit={{ y: 40, opacity: 0 }}
+          exit={view === 'report' ? { opacity: 0 } : { y: 40, opacity: 0 }}
           transition={{ type: 'spring', damping: 26, stiffness: 260 }}
           onClick={(e) => e.stopPropagation()}
         >

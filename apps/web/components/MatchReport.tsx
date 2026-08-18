@@ -3,10 +3,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Tag, IndianRupee, FileText, Layers, Brain, CheckCircle2, AlertTriangle,
-  Lightbulb, ExternalLink, RefreshCw, Ban, Info, Printer, ShieldCheck, Archive, Zap,
+  Lightbulb, ExternalLink, RefreshCw, Ban, Info, Printer, ShieldCheck, Archive, Zap, Ruler,
 } from 'lucide-react';
 import type { MatchReport as Report, ReportGroup, ReportRow, ReportCell, Verdict, ReportColumn } from '@/lib/types';
 import { api, PLATFORM_META, DEFAULT_TTL_HOURS } from '@/lib/api';
+import SizeChartTable from './SizeChartTable';
 
 // Legend colours. Grey ('na') deliberately reads as "no data", never as a
 // difference — most Ajio specification cells are genuinely unknown because its
@@ -243,7 +244,7 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
     return <p className="py-12 text-center text-sm text-rose-600 dark:text-rose-300">{error ?? 'Report unavailable.'}</p>;
   }
 
-  const { header, columns, groups, decision, legend } = data;
+  const { header, columns, groups, decision, legend, sizeChart } = data;
 
   return (
     <div className="report-scale flex flex-col gap-4">
@@ -310,6 +311,23 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
             {header.overallConfidence == null ? '—' : `${Math.round(header.overallConfidence * 100)}%`}
           </span>
           <span className={`chip font-bold ${matchTypeTone(header.matchType)}`}>{header.matchType}</span>
+          {/* Size-chart alarm. A mismatch is a returns driver, so it belongs
+              beside the match verdict, not only inside the chart section. */}
+          {header.sizeChartFlag ? (
+            <span
+              title={header.sizeChartFlag.detail}
+              className={`chip font-bold ${
+                header.sizeChartFlag.severity === 'major'
+                  ? 'bg-rose-500/15 text-rose-600 dark:text-rose-300'
+                  : header.sizeChartFlag.severity === 'minor'
+                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                    : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+              }`}
+            >
+              {header.sizeChartFlag.severity === 'none' ? <ShieldCheck size={12} /> : <Ruler size={12} />}
+              {header.sizeChartFlag.label}
+            </span>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-1">
@@ -509,6 +527,10 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
           </div>
         </aside>
       </div>
+
+      {/* Size chart — full width: it is a matrix (sizes x measurements x
+          platforms), not a row in the comparison table. */}
+      {sizeChart ? <SizeChartTable chart={sizeChart} /> : null}
 
       {/* Legend + refresh */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-2xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] px-4 py-3">

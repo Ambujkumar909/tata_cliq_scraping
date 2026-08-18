@@ -1,13 +1,30 @@
 /**
  * Ajio source adapter (pure HTTP, proxy-aware).
  *
- * Ajio sits behind Akamai and blocks datacenter/unclean IPs at the edge (HTTP 403
- * on every endpoint — even a full browser is blocked, so a headless browser buys
- * nothing). The correct, fast solution is a clean residential/mobile proxy via the
- * SCRAPE_PROXY env var. With a working egress IP this hits Ajio's JSON search API
- * directly. Without one, it degrades gracefully: { blocked: true }.
+ * Ajio sits behind Akamai and denies this egress IP at the edge: HTTP 403 with
+ * Akamai's "Access Denied / Reference #18.x" page on EVERY endpoint, including
+ * the homepage.
+ *
+ * Measured 2026-08-19, all from the same residential Reliance Jio IP in India
+ * (ip-api: proxy:false, hosting:false), while myntra.com and tatacliq.com both
+ * returned 200:
+ *
+ *   node fetch                → 403      Playwright Chromium   → 403
+ *   impit Chrome TLS profile  → 403      impit Firefox profile → 403
+ *
+ * So this is NOT a datacenter-IP problem, a TLS/JA3 fingerprint problem, or a
+ * missing-cookie problem — a genuine browser engine on a clean residential IP is
+ * refused before any bot-sensor runs.
+ *
+ * A browser sidecar was built and proven to work (headed Chromium under Xvfb
+ * reached the PDP where every HTTP client was refused), then removed on
+ * request. If Ajio detail is wanted again the options are that sidecar, a
+ * rotating residential/mobile proxy via SCRAPE_PROXY, or a managed unblocking
+ * API. Until then this degrades gracefully to { blocked: true } rather than
+ * inventing empty data.
  */
 import { fetchJson } from '../lib/http.mjs';
+import { parseMeasurement } from '../lib/format.mjs';
 
 const API = 'https://www.ajio.com/api/search';
 const HEADERS = {
@@ -92,12 +109,126 @@ export async function searchAjio(query, { limit = 40 } = {}) {
 /**
  * Product-detail enrichment.
  *
- * Ajio's PDP is harder-walled than its search API: both `/api/p/{code}` and the
- * PDP HTML return 403 from a datacenter IP even though search returns 200. So
- * unlike CLIQ and Myntra there is no detail tier here without SCRAPE_PROXY, and
+ * `/api/p/{code}` and the PDP HTML are refused by the same edge deny that stops
+ * search (see the module header — search does NOT return 200 from a blocked IP,
+ * whatever its reputation). So unlike CLIQ and Myntra there is no detail tier
+ * here without a working SCRAPE_PROXY, and
  * we say so explicitly rather than silently returning empty specs — the report
  * renders those cells as "not available" instead of implying a real difference.
  */
+/**
+ * Ajio's size chart, in the canonical cross-platform shape.
+ *
+ * VERIFIED against a live PDP on 2026-08-19 (MAX polo, code 460942193001),
+ * fetched from a real browser session — the earlier shape-tolerant guesser it
+ * replaces was written blind while the endpoint was unreachable.
+ *
+ * The chart is NOT a normal field: `fnlColorVariantData.sizeGuideDesktop` is a
+ * JSON *string* that must be parsed a second time. Inside it:
+ *
+ *   sizechart[] → { measurementType: "Garment Measurement" | "Body …",
+ *                   gender, brickName, brandName, howToMeasureImage1Url,
+ *                   brickBrandSizes[] → { sizeName,
+ *                     sizeChartAttributes[] → { attributeName: "Chest_attribute",
+ *                                               attributeValue:        "36",     // inches
+ *                                               convertedAttributeValue: "91.44" // cm
+ *                                             } } }
+ *
+ * Both units come for free, so no conversion is invented here.
+ */
+const AJIO_LABEL_ATTRS = /^(Universal Size|Brand Size)( Format)?$/i;
+
+function extractSizeGuide(data) {
+  const raw = data?.fnlColorVariantData?.sizeGuideDesktop;
+  if (typeof raw !== 'string' || !raw.includes('sizechart')) return null;
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+
+  const table = [];
+  const dimensions = [];
+  const units = new Set();
+  let imageUrl = null;
+
+  for (const group of parsed?.sizechart || []) {
+    // "Garment Measurement" vs a body chart — the basis the comparison needs so
+    // a to-fit number is never scored against a garment one.
+    const basisOf = /body/i.test(group?.measurementType || '') ? 'body' : 'garment';
+    imageUrl = imageUrl || group?.howToMeasureImage1Url || null;
+
+    for (const row of group?.brickBrandSizes || []) {
+      const size = String(row?.sizeName ?? '').trim();
+      if (!size) continue;
+      const measurements = {};
+      const basis = {};
+      let brandSize = null;
+
+      for (const attr of row?.sizeChartAttributes || []) {
+        const name = String(attr?.attributeName ?? '').replace(/_attribute$/i, '').trim();
+        if (!name) continue;
+        // Size LABELS ride in the same array as measurements; they are not axes.
+        if (AJIO_LABEL_ATTRS.test(name)) {
+          if (/^brand size$/i.test(name)) brandSize = String(attr.attributeValue ?? '').trim() || null;
+          continue;
+        }
+        const inch = parseMeasurement(attr?.attributeValue);
+        const cm = parseMeasurement(attr?.convertedAttributeValue);
+        if (!inch && !cm) continue;
+        measurements[name] = {
+          ...(inch ? { inch: inch.value, ...(inch.lo !== inch.hi ? { inchRange: [inch.lo, inch.hi] } : {}) } : {}),
+          ...(cm ? { cm: cm.value, ...(cm.lo !== cm.hi ? { cmRange: [cm.lo, cm.hi] } : {}) } : {}),
+        };
+        basis[name] = basisOf;
+        if (inch) units.add('inch');
+        if (cm) units.add('cm');
+        if (!dimensions.includes(name)) dimensions.push(name);
+      }
+
+      if (!Object.keys(measurements).length) continue;
+      table.push({ size, brandSize: brandSize || size, available: null, measurements, basis });
+    }
+  }
+
+  if (!table.length && !imageUrl) return null;
+  return { imageUrl, dimensions, table, units: [...units], rows: table.length };
+}
+
+/** PDP payload → the canonical detail shape. Transport-agnostic on purpose:
+ *  the plain-HTTP path and the browser path hand it the identical JSON. */
+function mapAjioDetail(data) {
+  const feature = {};
+  for (const g of data.featureData || data.classifications || []) {
+    // Ajio ships featureData FLAT — { name: 'Fabric', featureValues:[{value}] } —
+    // not as classification groups containing features. Reading it as nested
+    // found a name on nothing and silently produced zero attributes, which is
+    // why the Ajio specification cells stayed blank even once the PDP was
+    // reachable. Both shapes are handled: flat first, nested as the fallback.
+    if (g?.name && Array.isArray(g.featureValues)) {
+      const v = g.featureValues.map((x) => x?.value ?? x).filter(Boolean).join(', ');
+      if (v) feature[g.name] = v;
+      continue;
+    }
+    for (const f of g?.features || []) {
+      const k = f.name || f.code;
+      const v = Array.isArray(f.featureValues) ? f.featureValues.map((x) => x.value).join(', ') : f.value;
+      if (k && v) feature[k] = v;
+    }
+  }
+  const images = Array.isArray(data.images) ? data.images.filter((i) => i.format === 'product').length : 0;
+  return {
+    available: true,
+    description: data.description || null,
+    attributes: feature,
+    countryOfOrigin: data.countryOfOrigin || feature['Country of Origin'] || null,
+    imageCount: images || (Array.isArray(data.images) ? data.images.length : 0),
+    sizeGuide: extractSizeGuide(data),
+    videoAvailable: false,
+    inStock: data.stock?.stockLevelStatus !== 'outOfStock',
+    offers: (data.potentialPromotions || []).map((o) => o.description || o.title).filter(Boolean),
+    returnPolicy: data.returnPolicy || null,
+    seller: data.sellerName || null,
+  };
+}
+
 export async function fetchAjioDetail(product) {
   const code = product?.id;
   if (!code) return { available: false, reason: 'no_product_code' };
@@ -106,27 +237,7 @@ export async function fetchAjioDetail(product) {
       headers: HEADERS,
       retries: 1,
     });
-    const feature = {};
-    for (const g of data.featureData || data.classifications || []) {
-      for (const f of g.features || g.featureValues || []) {
-        const k = f.name || f.code;
-        const v = Array.isArray(f.featureValues) ? f.featureValues.map((x) => x.value).join(', ') : f.value;
-        if (k && v) feature[k] = v;
-      }
-    }
-    const images = Array.isArray(data.images) ? data.images.filter((i) => i.format === 'product').length : 0;
-    return {
-      available: true,
-      description: data.description || null,
-      attributes: feature,
-      countryOfOrigin: data.countryOfOrigin || feature['Country of Origin'] || null,
-      imageCount: images || (Array.isArray(data.images) ? data.images.length : 0),
-      videoAvailable: false,
-      inStock: data.stock?.stockLevelStatus !== 'outOfStock',
-      offers: (data.potentialPromotions || []).map((o) => o.description || o.title).filter(Boolean),
-      returnPolicy: data.returnPolicy || null,
-      seller: data.sellerName || null,
-    };
+    return mapAjioDetail(data);
   } catch (err) {
     if (err.status === 403) return { available: false, reason: 'akamai-ip-block' };
     return { available: false, reason: err.message };

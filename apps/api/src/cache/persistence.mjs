@@ -52,7 +52,12 @@ const JOB_KEY = (id) => `${PREFIX}:job:${id}`;
 // unchanged, but a v5 record simply has no such fields — replaying one would
 // render those report rows permanently blank and read as a broken feature
 // rather than as missing data. Orphaning them re-scrapes once and fills them in.
-export const MATCHER_VERSION = 'v6';
+//
+// v7: comparisons now carry the cross-platform size-chart matrix (per-size
+// measurements from every platform, with mismatches flagged). Same reasoning as
+// v6 — verdicts are unchanged, but a v6 record has no `sizeChart`, so replaying
+// one renders the new section permanently empty. Orphan them.
+export const MATCHER_VERSION = 'v7';
 export const fingerprint = () =>
   `${MATCHER_VERSION}-s${config.strictSku ? 1 : 0}-m${String(config.matchMinScore).replace('.', '')}`;
 

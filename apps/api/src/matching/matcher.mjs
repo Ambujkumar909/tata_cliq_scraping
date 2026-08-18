@@ -25,6 +25,7 @@
 import { searchMyntra, fetchMyntraDetail } from '../sources/myntra.mjs';
 import { searchAjio, fetchAjioDetail } from '../sources/ajio.mjs';
 import { fetchCliqDetail } from '../sources/tatacliq.mjs';
+import { compareSizeCharts } from './sizechart.mjs';
 import {
   buildQueries, detectGender, detectGarment, stripBrand, normalizeText,
 } from '../lib/normalize.mjs';
@@ -431,6 +432,22 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
   const numeric = Object.entries(prices).filter(([, v]) => typeof v === 'number');
   const cheapest = numeric.length ? numeric.reduce((a, b) => (b[1] < a[1] ? b : a)) : null;
 
+  // Size-chart agreement across platforms. Only MATCHED competitors take part —
+  // measuring the anchor against a listing we did not prove is the same SKU
+  // would report a mismatch that means nothing.
+  const sizeChart = compareSizeCharts({
+    tatacliq: { guide: detail?.sizeGuide ?? null, reason: detail?.available ? 'not_published' : detail?.reason },
+    ...Object.fromEntries(
+      names.map((n) => {
+        const c = competitors[n];
+        return [n, {
+          guide: c?.status === 'matched' ? c.product?.sizeGuide ?? null : null,
+          reason: c?.status !== 'matched' ? (c?.status || 'no_match') : c?.detailReason || 'not_published',
+        }];
+      }),
+    ),
+  });
+
   return {
     anchor: {
       // `resolved`, not `anchor` — gender and garment are only settled once the
@@ -465,6 +482,7 @@ export async function matchAnchor(anchorRaw, { minScore = 0.58, strictSku = true
       detailAvailable: Boolean(detail?.available),
     },
     competitors,
+    sizeChart,
     summary: {
       prices,
       cheapest: cheapest ? { platform: cheapest[0], price: cheapest[1] } : null,
