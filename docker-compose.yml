@@ -44,6 +44,10 @@ services:
       # Read Ajio's PDP tier through a headed browser on a virtual display.
       # Requires the image to be built with --build-arg WITH_BROWSER=true.
       AJIO_BROWSER_COOKIES: ${AJIO_BROWSER_COOKIES:-false}
+      # Background chart harvester (needs AJIO_BROWSER_COOKIES too). Off: the
+      # stack is fully functional without Ajio charts.
+      CHART_HARVEST: ${CHART_HARVEST:-false}
+      CHART_HARVEST_GAP_MS: ${CHART_HARVEST_GAP_MS:-40000}
       CHROME_PATH: ${CHROME_PATH:-/usr/bin/chromium-browser}
       INGEST_TARGET_COUNT: ${INGEST_TARGET_COUNT:-2000}
       # Saved comparisons are replayed for this long before re-scraping.
