@@ -27,6 +27,12 @@ export const config = {
   ajioBrowserCookies: process.env.AJIO_BROWSER_COOKIES === 'true',
   /** Explicit browser binary for the Ajio session (Linux: /usr/bin/chromium). */
   chromePath: process.env.CHROME_PATH || '',
+  /** On-disk Chrome profile. Persisting it is not an optimisation — a
+   *  throwaway profile is precisely what Ajio refuses. */
+  browserProfileDir: process.env.BROWSER_PROFILE_DIR || '',
+  /** Background size-chart harvester: gentle pace, long cache. */
+  chartHarvest: process.env.CHART_HARVEST === 'true',
+  chartHarvestGapMs: Number(process.env.CHART_HARVEST_GAP_MS || 40000),
   httpTimeoutMs: Number(process.env.HTTP_TIMEOUT_MS || 20000),
 
   /**

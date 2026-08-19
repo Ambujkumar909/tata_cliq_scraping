@@ -28,12 +28,12 @@
  * behaviour — Ajio specs render "not available", never a crash.
  */
 import { config } from '../config.mjs';
+import { resolve } from 'node:path';
 
 const IDLE_CLOSE_MS = 5 * 60 * 1000;
 const PAGE_MAX_AGE_MS = 15 * 60 * 1000; // recycle before Akamai sours on it
 const NAV_TIMEOUT_MS = 30000;
 
-let _browser = null;
 let _ctx = null;
 let _page = null;
 let _pageAt = 0;
@@ -43,40 +43,46 @@ let _disabled = false;
 
 const log = (m) => console.log(`[ajio-session] ${m}`);
 
-async function launchBrowser() {
+/**
+ * Launch a PERSISTENT browser context.
+ *
+ * A default Playwright launch is refused by Ajio even headed: it runs with
+ * `--enable-automation`, leaving `navigator.webdriver === true` and an empty
+ * throwaway profile. Measured side by side, minutes apart on one machine:
+ * default launch -> "Access Denied"; persistent profile with that flag
+ * suppressed -> page loads and the in-page API returns 200 WITH the size guide.
+ *
+ * The profile lives on disk and accumulates ordinary cookies/history, which is
+ * precisely what makes it read as a returning customer rather than a scraper.
+ * NOTE: a user-data-dir is single-instance — only one process may hold it.
+ */
+async function launchContext() {
   let chromium;
   try {
     ({ chromium } = await import('playwright-core'));
   } catch {
-    log('playwright-core not installed — Ajio PDP stays unavailable');
+    log('playwright-core not installed — Ajio charts stay unavailable');
     _disabled = true;
     return null;
   }
-
-  // Headless is fingerprinted and refused, so we always run headed. On Linux
-  // that needs a display: DISPLAY set by Xvfb (the Docker image does this).
+  const userDataDir = config.browserProfileDir || resolve(process.cwd(), '.cache', 'ajio-profile');
+  const base = {
+    headless: false, // headless is fingerprinted and refused outright
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
+    ignoreDefaultArgs: ['--enable-automation'],
+    locale: 'en-IN', timezoneId: 'Asia/Kolkata', viewport: { width: 1366, height: 768 },
+  };
   const attempts = [];
   if (config.chromePath) attempts.push({ executablePath: config.chromePath });
   attempts.push({ channel: 'chrome' }, { channel: 'chromium' }, { channel: 'msedge' }, {});
-
   for (const opts of attempts) {
     try {
-      const b = await chromium.launch({
-        headless: false,
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--no-sandbox',
-          '--disable-dev-shm-usage', // small /dev/shm in containers
-        ],
-        ...opts,
-      });
+      const ctx = await chromium.launchPersistentContext(userDataDir, { ...base, ...opts });
       log(`browser ready (${opts.channel || opts.executablePath || 'default'})`);
-      return b;
-    } catch {
-      /* next candidate */
-    }
+      return ctx;
+    } catch { /* next candidate */ }
   }
-  log('no usable browser (set CHROME_PATH, and DISPLAY on Linux) — Ajio PDP stays unavailable');
+  log('no usable browser (set CHROME_PATH, and DISPLAY on Linux) — Ajio charts stay unavailable');
   _disabled = true;
   return null;
 }
@@ -87,21 +93,13 @@ async function ensurePage(seedUrl) {
   if (_booting) return _booting;
 
   _booting = (async () => {
-    // Recycle whatever is stale.
+    // Recycle a stale page but KEEP the persistent context — its accumulated
+    // profile is what makes Ajio treat this as an ordinary browser.
     if (_page && !_page.isClosed()) await _page.close().catch(() => {});
-    if (_ctx) await _ctx.close().catch(() => {});
     _page = null;
-    _ctx = null;
-
-    if (!_browser || !_browser.isConnected()) _browser = await launchBrowser();
-    if (!_browser) return null;
-
+    if (!_ctx) _ctx = await launchContext();
+    if (!_ctx) return null;
     try {
-      _ctx = await _browser.newContext({
-        locale: 'en-IN',
-        timezoneId: 'Asia/Kolkata',
-        viewport: { width: 1366, height: 768 },
-      });
       const page = await _ctx.newPage();
       await page.goto(seedUrl, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       // A little human motion; the sensor watches for it.
@@ -110,9 +108,8 @@ async function ensurePage(seedUrl) {
       await page.waitForTimeout(2000);
 
       if (/access denied/i.test(await page.title())) {
-        log('seed page denied — Ajio is refusing this client entirely');
-        await _ctx.close().catch(() => {});
-        _ctx = null;
+        log('seed page denied — Ajio is refusing this client right now');
+        await page.close().catch(() => {});
         return null;
       }
       _page = page;
@@ -145,7 +142,8 @@ function scheduleClose() {
  */
 export async function ajioPdpFetch(code, seedUrl) {
   if (!config.ajioBrowserCookies || _disabled || !code) return null;
-  const page = await ensurePage(seedUrl || `https://www.ajio.com/p/${code}`);
+  if (!seedUrl) return null; // a REAL pdp url is required to seed a usable context
+  const page = await ensurePage(seedUrl);
   if (!page) return null;
   scheduleClose();
 
@@ -173,9 +171,8 @@ export const ajioBrowserEnabled = () => config.ajioBrowserCookies && !_disabled;
 /** Release the browser (idle timer and shutdown). */
 export async function closeAjioSession() {
   clearTimeout(_closeTimer);
-  const b = _browser;
-  _browser = null;
+  const c = _ctx;
   _ctx = null;
   _page = null;
-  await b?.close().catch(() => {});
+  await c?.close().catch(() => {});
 }

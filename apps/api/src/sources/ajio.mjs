@@ -20,6 +20,7 @@ import { parseMeasurement } from '../lib/format.mjs';
 import { ajioPdpFetch, ajioBrowserEnabled } from './ajio-session.mjs';
 import { config } from '../config.mjs';
 import { cached, cacheKey, TTL } from '../cache/fetch-cache.mjs';
+import { wantChart, getChart } from './ajio-chart-harvester.mjs';
 
 const API = 'https://www.ajio.com/api/search';
 const HEADERS = {
@@ -199,6 +200,10 @@ function extractSizeGuide(data) {
 export async function fetchAjioDetail(product) {
   const code = product?.id;
   if (!code) return fetchAjioDetailLive(product);
+  // Register demand for this brand+category chart. Charts are shared across a
+  // whole brand line, so the harvester fetches ONE and every sibling product
+  // gets it — including when the PDP itself is refused.
+  wantChart(product.brand, product.articleType || product.category?.brick);
   return cached(
     cacheKey.pdp('ajio', code),
     TTL.pdp,
