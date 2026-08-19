@@ -19,6 +19,7 @@ import { fetchJson } from '../lib/http.mjs';
 import { parseMeasurement } from '../lib/format.mjs';
 import { ajioPdpFetch, ajioBrowserEnabled } from './ajio-session.mjs';
 import { config } from '../config.mjs';
+import { cached, cacheKey, TTL } from '../cache/fetch-cache.mjs';
 
 const API = 'https://www.ajio.com/api/search';
 const HEADERS = {
@@ -84,7 +85,16 @@ function mapProduct(p) {
   };
 }
 
-export async function searchAjio(query, { limit = 40 } = {}) {
+export async function searchAjio(query, opts = {}) {
+  return cached(
+    cacheKey.search('ajio', `${query}|${opts.limit ?? 40}`),
+    TTL.search,
+    () => searchAjioLive(query, opts),
+    { estBytes: 674_000, skip: (r) => r?.blocked || !r?.candidates?.length },
+  );
+}
+
+async function searchAjioLive(query, { limit = 40 } = {}) {
   const url =
     `${API}?fields=SITE&currentPage=0&pageSize=${limit}&format=json` +
     `&query=${encodeURIComponent(query.trim())}&sortBy=relevance&platform=Desktop`;
@@ -187,6 +197,17 @@ function extractSizeGuide(data) {
 }
 
 export async function fetchAjioDetail(product) {
+  const code = product?.id;
+  if (!code) return fetchAjioDetailLive(product);
+  return cached(
+    cacheKey.pdp('ajio', code),
+    TTL.pdp,
+    () => fetchAjioDetailLive(product),
+    { estBytes: 60_000, skip: (d) => !d?.available },
+  );
+}
+
+async function fetchAjioDetailLive(product) {
   const code = product?.id;
   if (!code) return { available: false, reason: 'no_product_code' };
   try {

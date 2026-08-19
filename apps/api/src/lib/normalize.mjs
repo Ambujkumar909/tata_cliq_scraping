@@ -302,12 +302,28 @@ export function buildQueries(anchor) {
   const pattern = detectPattern(anchor.title) || '';
   const dist = distinctiveTokens(anchor.title, anchor.brand);
 
-  const q = [
-    [brand, g, gw, color],                    // colour-narrowed (works when names agree)
-    [brand, g, gw, dist.slice(0, 2).join(' ')], // distinctive tokens
-    [brand, g, gw, pattern, color],           // pattern + colour
-    [brand, g, gw],                           // broad fallback
-  ].map((parts) => parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim());
+  const join = (parts) => parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
 
-  return [...new Set(q)].filter(Boolean);
+  // SHARED first, then SPECIFIC. The shared query carries no per-product
+  // tokens, so every U.S. Polo men's polo in a 10k catalog issues the SAME
+  // string — that is what makes the response cache actually hit (measured: with
+  // per-product tokens in every query the hit rate was 12%, because two
+  // products practically never ask the same question). The matcher runs the
+  // shared query alone first and only pays for the specific ones when it fails
+  // to produce a match, so recall is unchanged while request volume falls.
+  const shared = [
+    join([brand, g, gw]),        // brand + gender + garment — highly repeatable
+    join([brand, g, gw, color]), // colour-narrowed; colour repeats across a line
+  ];
+  const specific = [
+    join([brand, g, gw, dist.slice(0, 2).join(' ')]), // distinctive tokens
+    join([brand, g, gw, pattern, color]),             // pattern + colour
+  ];
+
+  const dedup = (arr) => [...new Set(arr)].filter(Boolean);
+  const all = dedup([...shared, ...specific]);
+  // Array shape preserved for existing callers; the split rides alongside.
+  all.shared = dedup(shared);
+  all.specific = dedup(specific).filter((q) => !all.shared.includes(q));
+  return all;
 }

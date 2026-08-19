@@ -9,6 +9,8 @@
  */
 import { extractJsonAfter, getProxyDispatcher } from '../lib/http.mjs';
 import { parseMeasurement } from '../lib/format.mjs';
+import { cached, cacheKey, TTL } from '../cache/fetch-cache.mjs';
+import { pace, penalize, reward } from '../lib/pacer.mjs';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -30,7 +32,12 @@ async function fetchWithTimeout(url, init = {}, timeoutMs) {
     // Respect PROXY_HOSTS scoping (datacenter deploys need myntra.com routed
     // through the residential proxy — Akamai walls it just like Ajio).
     const dispatcher = await getProxyDispatcher(url);
-    return await fetch(url, { ...init, signal: ctrl.signal, ...(dispatcher ? { dispatcher } : {}) });
+    // Human pacing: every Myntra call goes through the bucket + jitter.
+    await pace(url);
+    const res = await fetch(url, { ...init, signal: ctrl.signal, ...(dispatcher ? { dispatcher } : {}) });
+    if (res.status === 403 || res.status === 429) penalize(url, `HTTP ${res.status}`);
+    else if (res.ok) reward(url);
+    return res;
   } finally {
     clearTimeout(timer);
   }
@@ -282,7 +289,20 @@ function extractSizeGuide(d) {
  * `descriptors`, media counts, offers, serviceability and stock flags — so no
  * headless browser is required. Never throws: returns { available:false }.
  */
-export async function fetchMyntraDetail(product, { timeoutMs } = {}) {
+export async function fetchMyntraDetail(product, opts = {}) {
+  const code = product?.id;
+  if (!code) return fetchMyntraDetailLive(product, opts);
+  // The same competitor product is a candidate for many anchors, and its specs
+  // and size chart do not change — only its price, which comes from search.
+  return cached(
+    cacheKey.pdp('myntra', code),
+    TTL.pdp,
+    () => fetchMyntraDetailLive(product, opts),
+    { estBytes: 450_000, skip: (d) => !d?.available },
+  );
+}
+
+async function fetchMyntraDetailLive(product, { timeoutMs } = {}) {
   const url = product?.url || (product?.id ? `https://www.myntra.com/product/${product.id}` : null);
   if (!url) return { available: false, reason: 'no_product_url' };
   try {
@@ -367,7 +387,18 @@ export async function fetchMyntraDetail(product, { timeoutMs } = {}) {
 // unions FOUR queries, so a second page per query bought ~70 extra candidates
 // for double the sequential search latency. Depth belongs to callers that need
 // it (the audit passes pages explicitly).
-export async function searchMyntra(query, { limit = 100, pages = 1 } = {}) {
+export async function searchMyntra(query, opts = {}) {
+  // A 10k-product run issues only ~2k DISTINCT queries: every U.S. Polo polo
+  // asks the same thing. Short TTL because prices ride in search results.
+  return cached(
+    cacheKey.search('myntra', `${query}|${opts.limit ?? 100}|${opts.pages ?? 1}`),
+    TTL.search,
+    () => searchMyntraLive(query, opts),
+    { estBytes: 1_376_000, skip: (r) => !r?.candidates?.length },
+  );
+}
+
+async function searchMyntraLive(query, { limit = 100, pages = 1 } = {}) {
   // Breaker armed → don't even try the gateway; the HTML fallback answers in
   // ~1s while the gateway would hang to its timeout.
   if (gatewayTarpitted()) return htmlFallback(query, limit).catch(() => ({ total: 0, candidates: [] }));

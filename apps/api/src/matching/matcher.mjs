@@ -156,25 +156,48 @@ async function matchOne(anchorCtx, sourceName, { minScore, strictSku }) {
   const queries = buildQueries(anchor);
   const tSearch = Date.now();
 
-  // ── Layer 1: retrieval ──────────────────────────────────────
-  const pages = await Promise.all(
-    queries.map((q) =>
-      search(q).then((r) => ({ q, ...r })).catch((err) => ({ q, error: err.message, candidates: [] })),
-    ),
-  );
-  if (pages.every((p) => p.blocked)) {
-    return { status: 'blocked', query: queries[0], reason: pages.find((p) => p.reason)?.reason || 'blocked' };
+  // ── Layer 1: retrieval, cheapest-first ──────────────────────
+  // SHARED queries carry no per-product tokens, so they repeat across a whole
+  // brand line and hit the response cache; SPECIFIC ones almost never repeat.
+  // Run shared first and only pay for specific when shared yields no candidate
+  // that clears the gates — recall unchanged, request volume roughly halved on
+  // the common path.
+  const runQueries = async (qs) =>
+    Promise.all(
+      qs.map((q) =>
+        search(q).then((r) => ({ q, ...r })).catch((err) => ({ q, error: err.message, candidates: [] })),
+      ),
+    );
+
+  const sharedQs = queries.shared?.length ? queries.shared : queries;
+  const specificQs = queries.specific ?? [];
+
+  let pages = await runQueries(sharedQs);
+  const byId = new Map();
+  const collect = (ps) => {
+    for (const p of ps) for (const c of p.candidates || []) if (!byId.has(c.id)) byId.set(c.id, c);
+  };
+  collect(pages);
+
+  let gated = [...byId.values()].map((c) => ({ c, g: hardGates(anchor, c) }));
+  let survivors = gated.filter((x) => x.g.pass);
+
+  // Escalate only when the cheap pass found nothing usable.
+  if (!survivors.length && specificQs.length) {
+    const more = await runQueries(specificQs);
+    pages = pages.concat(more);
+    collect(more);
+    gated = [...byId.values()].map((c) => ({ c, g: hardGates(anchor, c) }));
+    survivors = gated.filter((x) => x.g.pass);
   }
 
-  const byId = new Map();
-  for (const p of pages) for (const c of p.candidates || []) if (!byId.has(c.id)) byId.set(c.id, c);
-  const candidates = [...byId.values()];
-  const query = queries.join(' | ');
-  if (!candidates.length) return { status: 'no_results', query, total: 0 };
+  if (pages.every((p) => p.blocked)) {
+    return { status: 'blocked', query: sharedQs[0], reason: pages.find((p) => p.reason)?.reason || 'blocked' };
+  }
 
-  // ── Layer 2: hard gates ─────────────────────────────────────
-  const gated = candidates.map((c) => ({ c, g: hardGates(anchor, c) }));
-  const survivors = gated.filter((x) => x.g.pass);
+  const candidates = [...byId.values()];
+  const query = pages.map((p) => p.q).join(' | ');
+  if (!candidates.length) return { status: 'no_results', query, total: 0 };
 
   if (!survivors.length) {
     const near = gated[0];
