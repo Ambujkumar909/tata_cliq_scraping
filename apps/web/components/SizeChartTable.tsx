@@ -25,9 +25,19 @@ const CELL_TONE: Record<'major' | 'minor', string> = {
   minor: 'bg-amber-500/10 text-amber-700 dark:text-amber-300 font-semibold',
 };
 
+// Reasons shown to a merchandiser, not to an engineer. Anything about HOW we
+// fetch — edge blocks, proxies, browser sessions — is our plumbing and means
+// nothing to the reader, so every infrastructure cause collapses to a plain
+// "not available". Reasons about the PRODUCT (no match, no chart published)
+// are genuinely useful and stay.
 const REASON_TEXT: Record<string, string> = {
-  'akamai-ip-block': 'blocked at the network edge',
-  blocked: 'blocked at the network edge',
+  'akamai-ip-block': 'not available',
+  blocked: 'not available',
+  browser_session_unavailable: 'not available',
+  'akamai-token-rejected': 'not available',
+  color_unproven: 'not available',
+  detail_error: 'not available',
+  timeout: 'not available',
   no_match: 'no confirmed match for this product',
   no_results: 'no candidate listings found',
   ambiguous: 'match could not be proven',

@@ -10,8 +10,8 @@ import { api, PLATFORM_META, DEFAULT_TTL_HOURS } from '@/lib/api';
 import SizeChartTable from './SizeChartTable';
 
 // Legend colours. Grey ('na') deliberately reads as "no data", never as a
-// difference — most Ajio specification cells are genuinely unknown because its
-// PDP is blocked, and colouring those red would invent differences.
+// difference — a platform often publishes nothing for a given field, and
+// colouring those blanks red would invent differences that do not exist.
 const VERDICT_STYLE: Record<Verdict, { text: string; dot: string; label: string }> = {
   best: { text: 'text-emerald-600 dark:text-emerald-300', dot: 'bg-emerald-400', label: 'Best / Higher' },
   moderate: { text: 'text-amber-600 dark:text-amber-300', dot: 'bg-amber-400', label: 'Moderate / Lower' },
@@ -341,8 +341,8 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
         <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/[0.07] px-3 py-2">
           <Info size={14} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-300" />
           <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-100/80">
-            {blocked.map((c) => `${c.label} detail unavailable (${c.detailReason})`).join(' · ')}. Those cells
-            show <span className="font-semibold">not available</span> rather than a difference.
+            {blocked.map((c) => `${c.label} details not available`).join(' · ')}. Those cells show{' '}
+            <span className="font-semibold">not available</span> rather than a difference.
           </p>
         </div>
       ) : null}
@@ -376,7 +376,7 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
                           ) : (
                             <span className="chip w-fit bg-slate-200 dark:bg-white/[0.1] text-[10px] text-slate-500 dark:text-white/50">
                               {c.status === 'blocked' ? <Ban size={10} /> : null}
-                              {c.status.replace(/_/g, ' ')}
+                              {c.status === 'blocked' ? 'not available' : c.status.replace(/_/g, ' ')}
                             </span>
                           )
                         ) : null}
@@ -494,7 +494,7 @@ export function MatchReport({ productId, onClose }: { productId: string; onClose
                       className="flex items-center justify-between rounded-lg bg-white dark:bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-slate-400 dark:text-white/40"
                     >
                       {c.label}
-                      <span>{c.status === 'blocked' ? 'blocked' : 'no match'}</span>
+                      <span>{c.status === 'blocked' ? 'not available' : 'no match'}</span>
                     </span>
                   );
                 }

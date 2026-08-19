@@ -18,7 +18,9 @@ function statusLabel(m: CompetitorMatch) {
     case 'no_results':
       return { icon: <SearchX size={14} />, text: 'Not found', hint: undefined };
     case 'blocked':
-      return { icon: <Ban size={14} />, text: 'Blocked — needs proxy', hint: undefined };
+      // How we fetch is our problem, not the reader's: no proxies, no edge
+      // blocks, no session talk in the product surface.
+      return { icon: <Ban size={14} />, text: 'Not available', hint: undefined };
     case 'ambiguous':
       return {
         icon: <SearchX size={14} />,

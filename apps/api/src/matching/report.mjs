@@ -447,7 +447,9 @@ function decisionSummary(cols, cmp) {
   for (const t of targets) {
     if (t.status === 'matched') continue;
     if (t.status === 'blocked') {
-      insights.push(`${t.label} could not be queried from this network (${t.detailReason || 'blocked'}).`);
+      // How the data is fetched is our plumbing. A merchandiser reading this
+      // needs to know the figure is missing, not why our network failed.
+      insights.push(`${t.label} data is not available for this product.`);
     } else if (t.status === 'ambiguous') {
       insights.push(
         `${t.label} has several near-identical listings at different prices — the exact SKU cannot be proven from public data. Verify manually.`,
